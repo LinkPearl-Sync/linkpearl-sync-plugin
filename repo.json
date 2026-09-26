@@ -3,8 +3,8 @@
     "Author": "Neprena",
     "Name": "Linkpearl Sync",
     "InternalName": "LinkpearlSync",
-    "AssemblyVersion": "0.4.0.0",
-    "TestingAssemblyVersion": "0.4.0.0",
+    "AssemblyVersion": "0.5.0.0",
+    "TestingAssemblyVersion": "0.5.0.0",
     "Description": "Syncs your modded appearance with the people you paired with and the groups you joined, peer to peer. Files go straight from one player to another, end-to-end encrypted: no server stores or redistributes them. The interface is in French for now.",
     "Punchline": "See your friends' mods, with no server in between.",
     "ApplicableVersion": "any",
@@ -19,11 +19,11 @@
     "LoadPriority": 0,
     "AcceptsFeedback": true,
     "DownloadCount": 0,
-    "LastUpdate": 1790432006,
+    "LastUpdate": 1790457821,
     "IconUrl": "https://raw.githubusercontent.com/LinkPearl-Sync/linkpearl-sync-plugin/main/Plugin_Logo.png",
-    "DownloadLinkInstall": "https://github.com/LinkPearl-Sync/linkpearl-sync-plugin/releases/download/v0.4.0/LinkpearlSync.zip",
-    "DownloadLinkUpdate": "https://github.com/LinkPearl-Sync/linkpearl-sync-plugin/releases/download/v0.4.0/LinkpearlSync.zip",
-    "DownloadLinkTesting": "https://github.com/LinkPearl-Sync/linkpearl-sync-plugin/releases/download/v0.4.0/LinkpearlSync.zip",
+    "DownloadLinkInstall": "https://github.com/LinkPearl-Sync/linkpearl-sync-plugin/releases/download/v0.5.0/LinkpearlSync.zip",
+    "DownloadLinkUpdate": "https://github.com/LinkPearl-Sync/linkpearl-sync-plugin/releases/download/v0.5.0/LinkpearlSync.zip",
+    "DownloadLinkTesting": "https://github.com/LinkPearl-Sync/linkpearl-sync-plugin/releases/download/v0.5.0/LinkpearlSync.zip",
     "TestingDalamudApiLevel": 15
   }
 ]
