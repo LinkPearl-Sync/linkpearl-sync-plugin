@@ -31,7 +31,7 @@ https://linkpearl-sync.github.io/repo.json
 Click **+**, then **Save**. Then open `/xlplugins`, search for **Linkpearl Sync** and install it.
 
 > [!IMPORTANT]
-> Version 0.3.0 no longer connects to 0.2.x: you and your friends need to update together.
+> Groups and Public need version 0.4.0 or later for every member. Versions before 0.3.0 no longer connect at all: keep the plugin up to date.
 
 **Requirements:** [Penumbra](https://github.com/xivdev/Penumbra) and [Glamourer](https://github.com/Ottermandias/Glamourer), installed and enabled.
 
@@ -79,6 +79,7 @@ That's it: your looks are exchanged whenever you are within range of each other.
 | Orange | uses Linkpearl, not paired yet |
 | Blue | sent you a pairing request |
 | Grey | paired, offline or paused |
+| Purple | member of one of your groups |
 | Red | paired, but something failed: see the **Pairs** page |
 
 ---
@@ -94,6 +95,7 @@ That's it: your looks are exchanged whenever you are within range of each other.
 - **Pause a peer**: **Pairs** page, pause button. The connection closes and their look is removed.
 - **Block animations, effects or sounds**: for everyone from the window's title bar, or for a single peer from the **Pairs** page. Nothing you block is downloaded.
 - **The cache**: folder and size in **Réglages > Cache** (Settings > Cache). Past the size you chose, the oldest looks go first, never the ones currently in front of you.
+- **Rendezvous services**: **Réglages > Réseau** (Settings > Network). The list comes with the project's service; **Ajouter** (add) takes another address, and the refresh button next to a service shows the services it knows, added only once you tick them. **Brider l'envoi** (throttle uploads), off by default, keeps your ping low in dungeons at the cost of much slower outfits.
 - **Back up your identity**: **Réglages > Sauvegarde** (Settings > Backup), at the top of the page. A single file, password-protected if you like. After a reinstall or on another PC, restoring it saves you from pairing with everyone again.
 
 ---
@@ -113,21 +115,21 @@ The code is a door, not a key: on its own, it lets no one in. After excluding so
 
 ### Public
 
-At the top of the **Groupes** (Groups) page, the **Public** checkbox, unchecked by default. Checked (the first time, confirm with **Activer Public**, enable Public), you see the modded appearance of every visible player who checked it too, and they see yours, with no code and no pairing. They are strangers: their animations, VFX and sounds are off by default. The **Animations**, **VFX** and **Sons** (sounds) checkboxes turn them back on for all of Public; under **Joueurs rencontrés** (players met), a player's effects button sets them for that player alone, and **Suivre le Public** (follow Public) brings them back to the shared setting. **Bloquer** (block), in two clicks, means they no longer see you and you no longer see them; the **Bloqués** (blocked) list lets you **Débloquer** (unblock). Unchecking **Public** keeps your blocks for next time.
+At the top of the **Groupes** (Groups) page, the **Public** card, off by default. Click **Activer** (enable), then the first time confirm with **Activer Public** (enable Public): you see the modded appearance of every visible player who enabled it too, and they see yours, with no code and no pairing. They are strangers: their animations, VFX and sounds are off by default. Under **Effets reçus** (effects received), the **Animations**, **VFX** and **Sons** (sounds) buttons turn them back on for all of Public; under **Joueurs rencontrés** (players met), a player's effects button sets them for that player alone, and **Suivre le Public** (follow Public) brings them back to the shared setting. The block button, in two clicks, means they no longer see you and you no longer see them; the **Bloqués** (blocked) list lets you **Débloquer** (unblock). **Désactiver** (disable) keeps your blocks for next time.
 
 ### Services' ban lists
 
-Each rendezvous service can publish a list of banned characters. A character listed by one of your services is not paired, not admitted into your groups, not seen through Public, and their appearance is not applied on your side, even if they are one of your pairs. Their row carries the **banni par un service** (banned by a service) chip, with the reason on hover. Such a list is a matter of reputation, not proof: removing a service from your settings lifts its bans.
+Each rendezvous service in your list can publish a list of banned characters. A character listed by one of your services is not paired, not admitted into your groups, not seen through Public, and their appearance is not applied on your side, even if they are one of your pairs. Their row carries the **banni par un service** (banned by a service) chip, with the reason on hover. Such a list is a matter of reputation, not proof: turning a service off or removing it from your settings lifts its bans.
 
 ---
 
 ## Privacy
 
-- Your files leave your game only for the peers you accepted, end-to-end encrypted.
+- Your files leave your game only for your pairs, the members of your groups and, if you enabled Public, the visible players who enabled it too. Always end-to-end encrypted.
 - For two players to find each other, Linkpearl goes through a **rendezvous service**. It never sees your files or your looks. It does see pairing requests go by, with the characters' names and public keys, and the IP addresses of those who use it.
 - If you keep **Me signaler aux autres joueurs** (let other players see me, on by default), the service can know that your character is online: that is what lets others recognise you. You can turn it off in **Réglages > Visibilité** (Settings > Visibility).
 - Joining a group also goes through the rendezvous service, which sees the code and the character's name and world. As with pairing, trust is established on first contact: for a group with a password, a long password is what really protects it.
-- You can host your own rendezvous service: see the [self-hosting guide](https://linkpearl-sync.github.io/expert.html#self-host). You and your friends just need to share at least one.
+- You can host your own rendezvous service in one command: see [Host a rendezvous](https://linkpearl-sync.github.io/heberger.html) (Linux with systemd; the server then updates itself), or the [step-by-step guide](https://linkpearl-sync.github.io/expert.html#self-host). You and your friends just need to share at least one.
 
 ---
 
@@ -135,4 +137,4 @@ Each rendezvous service can publish a list of banned characters. A character lis
 
 Open an [issue](https://github.com/LinkPearl-Sync/linkpearl-sync-plugin/issues) describing what you did and what you saw. The Dalamud log (`/xllog`) helps a lot. Issues in English or French are both welcome.
 
-For the curious, [the technical page](https://linkpearl-sync.github.io/expert.html) explains connections, encryption and federation. For contributors, the design and the protocol are described in [`docs/`](docs/) (in French).
+For the curious, [the technical page](https://linkpearl-sync.github.io/expert.html) explains connections, encryption and federation, and [the network page](https://linkpearl-sync.github.io/reseau.html) shows the open circle live. For contributors, the design and the protocol are described in [`docs/`](docs/) (in French).

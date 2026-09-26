@@ -28,7 +28,7 @@ https://linkpearl-sync.github.io/repo.json
 Cliquez sur **+**, puis sur **Enregistrer**. Ouvrez ensuite `/xlplugins`, cherchez **Linkpearl Sync** et installez-le.
 
 > [!IMPORTANT]
-> La version 0.3.0 ne se connecte plus aux 0.2.x : vous et vos amis devez mettre à jour ensemble.
+> Les groupes et le Public demandent la version 0.4.0 ou plus pour chaque membre. Les versions antérieures à 0.3.0 ne se connectent plus du tout : gardez le plugin à jour.
 
 **Prérequis :** [Penumbra](https://github.com/xivdev/Penumbra) et [Glamourer](https://github.com/Ottermandias/Glamourer), installés et activés.
 
@@ -52,7 +52,7 @@ Vous vous pairez avec un ami, en jeu, en deux clics. Dès lors, chacun voit l'au
 
 ### Au premier lancement
 
-Une courte présentation s'ouvre et vous fait choisir **où ranger le cache** (les apparences reçues, gardées sur votre disque pour ne pas les retélécharger) et **sa taille maximale**. Vous pourrez la revoir à tout moment depuis les réglages.
+Une courte présentation s'ouvre et vous fait choisir **où ranger le cache** (les apparences reçues, gardées sur votre disque pour ne pas les retélécharger) et **sa taille maximale**. Vous pourrez revoir l'un et l'autre à tout moment depuis les réglages.
 
 La fenêtre du plugin s'ouvre avec `/lpearl`, ou en cliquant sur l'entrée Linkpearl de la barre de statut du jeu.
 
@@ -76,7 +76,8 @@ C'est tout : vos apparences s'échangent dès que vous êtes à portée l'un de 
 | Orange | utilise Linkpearl, pas encore pairé |
 | Bleu | vous a envoyé une demande de pairage |
 | Gris | pairé, hors ligne ou en pause |
-| Rouge | pairé, mais quelque chose a échoué : voir la page Pairs |
+| Violet | membre d'un de vos groupes |
+| Rouge | pairé, mais quelque chose a échoué : voir la page **Pairs** |
 
 ---
 
@@ -91,6 +92,7 @@ C'est tout : vos apparences s'échangent dès que vous êtes à portée l'un de 
 - **Mettre un pair en pause** : page **Pairs**, bouton pause. La connexion se ferme et son apparence est retirée.
 - **Bloquer animations, effets ou sons** : pour tout le monde depuis la barre de titre de la fenêtre, ou pour un seul pair depuis la page **Pairs**. Rien n'est téléchargé de ce que vous bloquez.
 - **Le cache** : dossier et taille dans **Réglages > Cache**. Au-delà de la taille choisie, les apparences les plus anciennes partent, jamais celles que vous avez sous les yeux.
+- **Les services de rendez-vous** : **Réglages > Réseau**. La liste contient d'office le service du projet ; **Ajouter** en prend une autre adresse, et le bouton d'actualisation à côté d'un service montre ceux qu'il connaît, ajoutés seulement une fois cochés. **Brider l'envoi**, désactivé par défaut, garde le ping bas en donjon au prix de tenues bien plus lentes à arriver.
 - **Sauvegarder votre identité** : **Réglages > Sauvegarde**, en tête de page. Un seul fichier, protégé par un mot de passe si vous le souhaitez. Après une réinstallation ou sur un autre PC, le restaurer évite de refaire chaque pairage.
 
 ---
@@ -110,26 +112,26 @@ Le code est une porte, pas une clé : seul, il ne fait entrer personne. Après a
 
 ### Public
 
-En tête de la page **Groupes**, la case **Public**, décochée par défaut. Cochée (la première fois, confirmez avec **Activer Public**), vous voyez l'apparence moddée de tout joueur visible qui l'a cochée aussi, et il voit la vôtre, sans code ni pairage. Ce sont des inconnus : leurs animations, VFX et sons sont coupés par défaut. Les cases **Animations**, **VFX** et **Sons** les rétablissent pour tout le Public ; sous **Joueurs rencontrés**, le bouton d'effets d'un joueur le règle à part, et **Suivre le Public** le ramène au réglage commun. **Bloquer**, en deux clics, fait qu'il ne vous voit plus et que vous ne le voyez plus ; la liste **Bloqués** permet de **Débloquer**. Décocher **Public** garde vos blocages pour la prochaine fois.
+En tête de la page **Groupes**, la carte **Public**, désactivée par défaut. Cliquez sur **Activer**, puis la première fois confirmez avec **Activer Public** : vous voyez l'apparence moddée de tout joueur visible qui l'a activé aussi, et il voit la vôtre, sans code ni pairage. Ce sont des inconnus : leurs animations, VFX et sons sont coupés par défaut. Sous **Effets reçus**, les boutons **Animations**, **VFX** et **Sons** les rétablissent pour tout le Public ; sous **Joueurs rencontrés**, le bouton d'effets d'un joueur le règle à part, et **Suivre le Public** le ramène au réglage commun. Le bouton de blocage, en deux clics, fait qu'il ne vous voit plus et que vous ne le voyez plus ; la liste **Bloqués** permet de **Débloquer**. **Désactiver** garde vos blocages pour la prochaine fois.
 
 ### Listes de bannissement des services
 
-Chaque service de rendez-vous peut publier une liste de personnages bannis. Un personnage listé par l'un de vos services n'est ni pairé, ni admis dans vos groupes, ni vu par le Public, et son apparence n'est pas posée chez vous, même s'il est dans vos pairs. Sa ligne porte la puce **banni par un service**, avec le motif au survol. Une telle liste relève de la réputation, pas de la preuve : retirer un service de vos réglages lève ses bannissements.
+Chaque service de rendez-vous de votre liste peut publier une liste de personnages bannis. Un personnage listé par l'un de vos services n'est ni pairé, ni admis dans vos groupes, ni vu par le Public, et son apparence n'est pas posée chez vous, même s'il est dans vos pairs. Sa ligne porte la puce **banni par un service**, avec le motif au survol. Une telle liste relève de la réputation, pas de la preuve : couper un service ou le retirer de vos réglages lève ses bannissements.
 
 ---
 
 ## Vie privée
 
-- Vos fichiers ne quittent votre jeu que vers les pairs que vous avez acceptés, chiffrés de bout en bout.
+- Vos fichiers ne quittent votre jeu que vers vos pairs, les membres de vos groupes et, si vous avez activé Public, les joueurs visibles qui l'ont activé aussi. Toujours chiffrés de bout en bout.
 - Pour que deux joueurs se trouvent, Linkpearl passe par un **service de rendez-vous**. Il ne voit jamais vos fichiers ni vos apparences. Il voit en revanche passer les demandes de pairage, avec les noms des personnages et leurs clés publiques, ainsi que les adresses IP de ceux qui l'utilisent.
 - Si vous activez **Me signaler aux autres joueurs** (réglage par défaut), le service peut savoir que votre personnage est en ligne : c'est ce qui permet aux autres de vous reconnaître. Vous pouvez le désactiver dans **Réglages > Visibilité**.
 - Rejoindre un groupe passe aussi par le service de rendez-vous, qui voit le code, ainsi que le nom et le monde du personnage. Comme pour le pairage, la confiance s'établit au premier contact : pour un groupe à mot de passe, c'est un mot de passe long qui le protège vraiment.
-- Vous pouvez héberger votre propre service de rendez-vous : voir le [guide d'auto-hébergement](https://linkpearl-sync.github.io/expert.html#self-host). Vous et vos amis devez simplement en partager au moins un.
+- Vous pouvez héberger votre propre service de rendez-vous en une commande : voir [Héberger un rendez-vous](https://linkpearl-sync.github.io/heberger.html#fr) (Linux avec systemd ; le serveur se met ensuite à jour seul), ou le [guide pas à pas](https://linkpearl-sync.github.io/expert.html#self-host). Vous et vos amis devez simplement en partager au moins un.
 
 ---
 
 ## Une question, un souci ?
 
-Ouvrez une [issue](https://github.com/LinkPearl-Sync/linkpearl-sync-plugin/issues) en décrivant ce que vous avez fait et ce que vous avez vu. Le journal de Dalamud (`/xllog`) aide beaucoup.
+Ouvrez une [issue](https://github.com/LinkPearl-Sync/linkpearl-sync-plugin/issues) en décrivant ce que vous avez fait et ce que vous avez vu. Le journal de Dalamud (`/xllog`) aide beaucoup. Les issues en français ou en anglais sont également les bienvenues.
 
-Pour les curieux, [la page technique](https://linkpearl-sync.github.io/expert.html) explique la connexion, le chiffrement et la fédération. Pour les contributeurs, la conception et le protocole sont décrits dans [`docs/`](docs/).
+Pour les curieux, [la page technique](https://linkpearl-sync.github.io/expert.html) explique la connexion, le chiffrement et la fédération, et [la page du réseau](https://linkpearl-sync.github.io/reseau.html#fr) montre le cercle ouvert en direct. Pour les contributeurs, la conception et le protocole sont décrits dans [`docs/`](docs/).
