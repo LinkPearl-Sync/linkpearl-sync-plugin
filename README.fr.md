@@ -116,17 +116,24 @@ En tête de la page **Groupes**, la carte **Public**, désactivée par défaut. 
 
 ### Listes de bannissement des services
 
-Chaque service de rendez-vous de votre liste peut publier une liste de personnages bannis. Un personnage listé par l'un de vos services n'est ni pairé, ni admis dans vos groupes, ni vu par le Public, et son apparence n'est pas posée chez vous, même s'il est dans vos pairs. Sa ligne porte la puce **banni par un service**, avec le motif au survol. Une telle liste relève de la réputation, pas de la preuve : couper un service ou le retirer de vos réglages lève ses bannissements.
+Chaque service de rendez-vous de votre liste peut publier une liste de personnages bannis. Un personnage listé par l'un de vos services n'est ni pairé, ni admis dans vos groupes, ni vu par le Public, et son apparence n'est pas posée chez vous, même s'il est dans vos pairs. Sa ligne porte la puce **banni par un service**, avec le motif au survol. Une telle liste relève de la réputation, pas de la preuve : couper un service ou le retirer de vos réglages lève ses bannissements. Les services du cercle ouvert ne bannissent personne.
+
+---
+
+## Le cercle ouvert
+
+Une fois pairés, vous et votre pair vous retrouvez aussi par deux services tenus par des bénévoles, tirés d'une liste signée par l'autorité du projet (rdv.linkpearl.eorzea.events). Un service y entre de lui-même, après 72 heures à répondre à au moins 95 % des sondes, et ne voit jamais ni clé ni nom de personnage : le pairage lui-même, le Public et les membres de groupe que vous n'avez pas encore croisés restent sur les services de votre liste. Si aucun de vos deux services ne répond sous 10 secondes, ou sans liste valable, tout repasse par votre liste. La liste est relue toutes les six heures. L'interrupteur **Cercle ouvert**, sous **Réglages > Réseau**, est activé par défaut. [Qui en fait partie](https://linkpearl-sync.github.io/reseau.html#fr).
 
 ---
 
 ## Vie privée
 
 - Vos fichiers ne quittent votre jeu que vers vos pairs, les membres de vos groupes et, si vous avez activé Public, les joueurs visibles qui l'ont activé aussi. Toujours chiffrés de bout en bout.
-- Pour que deux joueurs se trouvent, Linkpearl passe par un **service de rendez-vous**. Il ne voit jamais vos fichiers ni vos apparences. Il voit en revanche passer les demandes de pairage, avec les noms des personnages et leurs clés publiques, ainsi que les adresses IP de ceux qui l'utilisent.
+- Pour que deux joueurs se trouvent, Linkpearl passe par des **services de rendez-vous**. Ils ne voient jamais vos fichiers ni vos apparences. Ceux de votre liste voient en revanche passer les demandes de pairage, avec les noms des personnages et leurs clés publiques, ainsi que les adresses IP de ceux qui les utilisent.
+- Les services du cercle ouvert voient votre adresse IP, quand vous et un pair vous annoncez, et le volume d'une session relayée, mais aucun nom, aucune clé, aucun fichier.
 - Si vous activez **Me signaler aux autres joueurs** (réglage par défaut), le service peut savoir que votre personnage est en ligne : c'est ce qui permet aux autres de vous reconnaître. Vous pouvez le désactiver dans **Réglages > Visibilité**.
 - Rejoindre un groupe passe aussi par le service de rendez-vous, qui voit le code, ainsi que le nom et le monde du personnage. Comme pour le pairage, la confiance s'établit au premier contact : pour un groupe à mot de passe, c'est un mot de passe long qui le protège vraiment.
-- Vous pouvez héberger votre propre service de rendez-vous en une commande : voir [Héberger un rendez-vous](https://linkpearl-sync.github.io/heberger.html#fr) (Linux avec systemd ; le serveur se met ensuite à jour seul), ou le [guide pas à pas](https://linkpearl-sync.github.io/expert.html#self-host). Vous et vos amis devez simplement en partager au moins un.
+- Vous pouvez héberger votre propre service de rendez-vous en une commande : voir [Héberger un rendez-vous](https://linkpearl-sync.github.io/heberger.html#fr) (Linux avec systemd ; le serveur se met ensuite à jour seul), ou le [guide pas à pas](https://linkpearl-sync.github.io/expert.html#self-host). Vous et vos amis devez simplement en partager au moins un. Par défaut, un nouveau service se porte aussi candidat au cercle ouvert, et y entre après 72 heures de réponses fiables (`--no-announce` pour s'en tenir à l'écart).
 
 ---
 
