@@ -732,13 +732,15 @@ public sealed class SyncEngine : IAsyncDisposable
     }
 
     /// <summary>
-    /// Dit au pair qu'on le met en pause, puis laisse partir la trame.
+    /// Dit au pair qu'on le met en pause, puis laisse à la trame le temps d'arriver.
     /// </summary>
     /// <remarks>
-    /// La fermeture suit aussitôt, et LiteNetLib peut jeter une trame fiable
-    /// encore en file quand la connexion tombe : on attend que le canal de
-    /// contrôle se vide, une seconde au plus. Au mieux : perdu, l'avis laisse
-    /// l'autre nous voir absent, comme avant qu'il existe.
+    /// La fermeture suit, et elle jette tout ce que LiteNetLib n'a pas encore vu
+    /// accusé. Une file vide veut seulement dire « envoyé une fois » : un
+    /// datagramme perdu ne serait jamais renvoyé. On attend donc la vidange,
+    /// puis deux allers-retours et une marge, de quoi passer une
+    /// retransmission, une seconde au plus en tout. Au mieux : perdu malgré
+    /// tout, l'avis laisse l'autre nous voir absent, comme avant qu'il existe.
     /// </remarks>
     private async Task SendPauseAsync(Runtime runtime, PeerSession session, CancellationToken ct)
     {
@@ -747,10 +749,21 @@ public sealed class SyncEngine : IAsyncDisposable
             await session.SendAsync(ChannelPlan.ControlChannel, MessageKind.Pause, ReadOnlyMemory<byte>.Empty, ct)
                 .ConfigureAwait(false);
 
-            for (var waited = 0; waited < 20 && session.Link.PendingOn(ChannelPlan.ControlChannel) > 0; waited++)
-                await Task.Delay(50, ct).ConfigureAwait(false);
+            // Du temps réel, pas l'horloge du moteur : c'est le réseau qu'on
+            // attend, et l'horloge des tests n'avance pas pendant ce délai.
+            var budget  = TimeSpan.FromSeconds(1);
+            var elapsed = System.Diagnostics.Stopwatch.StartNew();
 
-            _log.Info($"{runtime.Pair.DisplayName} : avis de pause envoyé.");
+            while (session.Link.PendingOn(ChannelPlan.ControlChannel) > 0 && elapsed.Elapsed < budget)
+                await Task.Delay(15, ct).ConfigureAwait(false);
+
+            var left  = budget - elapsed.Elapsed;
+            var grace = TimeSpan.FromMilliseconds(2 * Math.Max(session.Link.RoundTripMs, 0) + 50);
+
+            if (left > TimeSpan.Zero)
+                await Task.Delay(grace < left ? grace : left, ct).ConfigureAwait(false);
+
+            _log.Info($"{runtime.Pair.DisplayName} : avis de pause confié au lien.");
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {

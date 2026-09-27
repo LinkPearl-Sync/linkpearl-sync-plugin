@@ -545,6 +545,16 @@ public sealed class SyncEngineTests : IDisposable
         // ne doit l'obliger à le chercher pour le lui dire.
         await using var world = await TwoEnginesAsync();
 
+        // Alice tourne seule : elle cherche Bob, qui ne répond pas. C'est
+        // pendant cette recherche, sans session, que tombe la pause.
+        for (var i = 0; i < 5; i++)
+        {
+            world.Clock.Advance(TimeSpan.FromMilliseconds(50));
+            await world.Alice.TickAsync([], default);
+        }
+
+        Assert.Contains(world.Alice.Statuses, status => status.Peer == world.BobId);
+
         world.AliceBook.SetPaused(world.BobId, true);
 
         for (var i = 0; i < 40; i++)
