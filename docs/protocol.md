@@ -928,6 +928,15 @@ d'identité** : une clé perdue ou compromise impose de recréer le personnage
 côté plugin et de se pairer à nouveau avec chacun, sans moyen de prévenir les
 pairs que l'ancienne clé ne doit plus être crue.
 
+**Pause d'un pair.** Mettre un pair en pause ferme la session. Si une session
+est ouverte à ce moment, le moteur y envoie d'abord `MessageKind.Pause = 0x11`,
+sans charge utile, puis attend que le canal de contrôle se vide, une seconde au
+plus. Sans session ouverte, rien ne part : une pause ne fait jamais chercher le
+pair pour la lui dire, ce qui lui apprendrait quand on se connecte. Un blocage
+n'envoie rien. Le receveur marque le pair dans son carnet et continue de le
+chercher au rythme d'un absent ; la première session rouverte efface la marque.
+Un avis reçu sur une session de groupe est ignoré.
+
 ## Bornes et déni de service
 
 Ce qu'un tiers ou un rendez-vous peut faire consommer, et ce qui l'arrête.
@@ -988,6 +997,8 @@ quand.
 - **Groupes privés** : dépôts `0x05` à `0x09`, politique et attestation au
   format `0x01`, message `0x10`, depuis le 24 septembre 2026. Un client plus
   ancien ignore `0x10` et ne reconnaît pas les dépôts d'admission.
+- **Avis de pause** : message `0x11` depuis le 26 septembre 2026. Un client plus
+  ancien l'ignore et continue de voir absent un pair qui l'a mis en pause.
 - Les chaînes de dérivation portent leur version (`…:v1`, `…:v2`) : un
   changement de format change l'étiquette.
 - Une incompatibilité se signale par un refus, jamais par une lecture
