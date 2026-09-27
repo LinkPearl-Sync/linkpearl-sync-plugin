@@ -19,6 +19,7 @@ internal sealed class CountingLog(string who) : ILogSink
     private readonly ConsoleLog _inner = new(who);
     private int _open;
     private readonly List<string> _relays = [];
+    private readonly List<string> _matches = [];
 
     public int OpenMatches => Volatile.Read(ref _open);
 
@@ -29,6 +30,16 @@ internal sealed class CountingLog(string who) : ILogSink
         {
             lock (_relays)
                 return [.. _relays];
+        }
+    }
+
+    /// <summary>Les services qui ont apparié, en « hôte:port » canonique.</summary>
+    public IReadOnlyList<string> Matches
+    {
+        get
+        {
+            lock (_matches)
+                return [.. _matches];
         }
     }
 
@@ -44,6 +55,17 @@ internal sealed class CountingLog(string who) : ILogSink
         if (message.StartsWith(opened, StringComparison.Ordinal))
             lock (_relays)
                 _relays.Add(message[opened.Length..].TrimEnd('.'));
+
+        const string matched = " : apparié sur ";
+        var at = message.IndexOf(matched, StringComparison.Ordinal);
+
+        if (at >= 0)
+        {
+            var service = message[(at + matched.Length)..].Replace(" (réseau ouvert)", "", StringComparison.Ordinal).TrimEnd('.');
+
+            lock (_matches)
+                _matches.Add(RendezvousAddress.TryParse(service, out var parsed, out _) ? ServiceConsensus.Canonical(parsed) : service);
+        }
 
         _inner.Info(message);
     }
@@ -87,7 +109,9 @@ public static class OpenCircleRun
             key, settings, expectOpen: false, ct).ConfigureAwait(false);
 
         ok &= await ScenarioAsync(
-            "relais le plus proche", SignWithRegions(key, settings.Open), key, settings, expectOpen: true, ct,
+            "relais le plus proche",
+            SignWithRegions(key, [.. settings.Open, new RendezvousAddress("127.0.0.1", 47996)]),
+            key, settings, expectOpen: true, ct,
             nearestRelay: settings.Open[0]).ConfigureAwait(false);
 
         Console.WriteLine();
@@ -144,13 +168,19 @@ public static class OpenCircleRun
     }
 
     /// <summary>
-    /// Une liste v2 : les deux premiers services en Europe, le troisième en
+    /// Une liste v2 : les deux premiers services en Europe, les suivants en
     /// Amérique. L'Europe compte deux familles, donc un tirage régional.
     /// </summary>
+    /// <remarks>
+    /// Le quatrième service, éteint, n'est là que pour que le placement puisse
+    /// retenir deux services sans le premier : avec trois familles seulement,
+    /// le meilleur d'Europe est toujours aussi l'un des deux meilleurs scores,
+    /// donc un lieu d'annonce qui peut gagner l'appariement.
+    /// </remarks>
     private static byte[] SignWithRegions(ECDsa key, IReadOnlyList<RendezvousAddress> services)
     {
         var issued = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        string[] regions = ["EU", "EU", "NA"];
+        string[] regions = ["EU", "EU", "NA", "NA"];
         var entries = services
             .Select((at, i) => new ConsensusEntry(
                 ServiceConsensus.Canonical(at), $"ouvert {i + 1}", [.. Enumerable.Repeat((byte)(i + 1), 8)], regions[i % regions.Length]))
@@ -203,13 +233,31 @@ public static class OpenCircleRun
 
         // Le secret de paire décide qui est éligible au relais, la latence ne
         // fait que départager : un service le plus proche mais non éligible ne
-        // serait jamais retenu, et le scénario échouerait une fois sur deux.
-        // On tire donc un secret qui rende nearestRelay éligible.
-        while (nearestRelay is { } target
-               && RelayPlacement.Eligible(
-                       pairSecret, aliceCircle.RelayEntriesFor(FederationRun.Pair(bobId, bobPublic, pairSecret, "Bob", anchor)), anchor)
-                   .Any(place => place.At == target) is false)
+        // serait jamais retenu. Et s'il était éligible par le placement, il
+        // serait aussi lieu d'annonce, pourrait gagner l'appariement, et le
+        // relais y resterait sans rien prouver. On tire donc un secret qui ne
+        // le rende éligible que par le tirage régional.
+        const int maxDraws = 10_000;
+        var draws = 0;
+
+        bool OnlyRegional(byte[] secret, RendezvousAddress target)
+        {
+            var entries = aliceCircle.RelayEntriesFor(FederationRun.Pair(bobId, bobPublic, secret, "Bob", anchor));
+
+            return ServicePlacement.Choose(secret, entries).Contains(target) is false
+                && RelayPlacement.Eligible(secret, entries, anchor).Any(place => place.At == target);
+        }
+
+        while (nearestRelay is { } target && OnlyRegional(pairSecret, target) is false)
+        {
+            if (++draws >= maxDraws)
+            {
+                Console.WriteLine($"   ÉCHEC : aucun secret de paire en {maxDraws} tirages ne rend {target} éligible par sa seule région");
+                return false;
+            }
+
             pairSecret = RandomNumberGenerator.GetBytes(32);
+        }
 
         var aliceBook = new PairBook(clock);
         // Seule Alice met Bob en relais seul : elle n'envoie alors que des RTT
@@ -286,13 +334,23 @@ public static class OpenCircleRun
 
         var applied = narrator.Applications > 0;
         var viaOpen = aliceLog.OpenMatches + bobLog.OpenMatches > 0;
+        // Le relais doit avoir quitté le service d'appariement pour le plus
+        // proche, des deux côtés : un relais resté là où l'on s'est apparié ne
+        // prouverait rien du choix.
+        var matches = aliceLog.Matches.Concat(bobLog.Matches).Distinct(StringComparer.Ordinal).ToList();
+        var relays = aliceLog.Relays.Concat(bobLog.Relays).Distinct(StringComparer.Ordinal).ToList();
         var nearestUsed = nearestRelay is not { } wanted
-            || aliceLog.Relays.Concat(bobLog.Relays).Any(relay => relay == ServiceConsensus.Canonical(wanted));
+            || (relays.Count == 1 && relays[0] == ServiceConsensus.Canonical(wanted)
+                && matches.Count > 0 && matches.Contains(relays[0], StringComparer.Ordinal) is false);
+
+        if (nearestRelay is not null)
+            Console.WriteLine($"   appariement sur {string.Join(", ", matches)}, relais par {string.Join(", ", relays)}");
+
         var good = applied && viaOpen == expectOpen && nearestUsed;
 
         Console.WriteLine($"   {(applied ? "apparence posée" : "aucun appariement")}, "
                         + $"{(viaOpen ? "par le cercle ouvert" : "par l'ancrage")}"
-                        + (nearestRelay is null ? "" : nearestUsed ? ", relais par le service le plus proche" : ", relais ailleurs")
+                        + (nearestRelay is null ? "" : nearestUsed ? ", relais déplacé vers le service le plus proche" : ", relais non déplacé vers le plus proche")
                         + $", attendu : posée {(expectOpen ? "par le cercle ouvert" : "par l'ancrage")} → {(good ? "conforme" : "ÉCHEC")}");
 
         try
