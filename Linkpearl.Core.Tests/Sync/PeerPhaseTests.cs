@@ -19,12 +19,13 @@ public class PeerPhaseTests
     private static readonly PeerView Empty = new(null, null, null, 0, 0, false);
 
     private static PeerPhase Offline(bool dialing = false, TimeSpan? wait = null, string? failure = null,
-                                     bool wasAbsent = false)
+                                     bool wasAbsent = false, bool pausedByPeer = false)
         => PeerPhases.Of(dialing, hasSession: false, Now, Now + (wait ?? TimeSpan.Zero), failure, wasAbsent,
-                         Empty, applied: false);
+                         pausedByPeer, Empty, applied: false);
 
-    private static PeerPhase Online(PeerView view, bool applied = false)
-        => PeerPhases.Of(dialing: false, hasSession: true, Now, Now, null, wasAbsent: false, view, applied);
+    private static PeerPhase Online(PeerView view, bool applied = false, bool pausedByPeer = false)
+        => PeerPhases.Of(dialing: false, hasSession: true, Now, Now, null, wasAbsent: false, pausedByPeer, view,
+                         applied);
 
     [Fact]
     public void Une_recherche_en_cours_n_est_pas_une_absence()
@@ -90,5 +91,23 @@ public class PeerPhaseTests
     public void Une_apparence_posee_se_dit_posee()
     {
         Assert.Equal(PeerPhase.Applied, Online(Empty with { Ready = true }, applied: true));
+    }
+
+    [Theory]
+    [InlineData(false, false, null)]
+    [InlineData(true, true, null)]
+    [InlineData(false, false, "relais injoignable")]
+    public void Un_pair_qui_nous_a_mis_en_pause_le_reste_sans_session(bool dialing, bool wasAbsent, string? failure)
+    {
+        // Pendant les essais qui suivent la pause, il sera tour à tour
+        // recherché, absent ou en échec : la ligne doit dire la pause.
+        Assert.Equal(PeerPhase.PausedByPeer,
+                     Offline(dialing, TimeSpan.FromSeconds(20), failure, wasAbsent, pausedByPeer: true));
+    }
+
+    [Fact]
+    public void Une_session_rouverte_l_emporte_sur_la_pause()
+    {
+        Assert.Equal(PeerPhase.AwaitingAppearance, Online(Empty, pausedByPeer: true));
     }
 }

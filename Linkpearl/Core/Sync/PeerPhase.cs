@@ -17,6 +17,9 @@ public enum PeerPhase
     /// <summary>La dernière tentative a échoué pour une vraie raison.</summary>
     Failing,
 
+    /// <summary>Il nous a mis en pause : il reviendra de lui-même en nous reprenant.</summary>
+    PausedByPeer,
+
     /// <summary>Session ouverte, son apparence n'est pas encore arrivée.</summary>
     AwaitingAppearance,
 
@@ -37,16 +40,23 @@ public static class PeerPhases
     /// <param name="nextAttempt">L'heure de la prochaine tentative, sans objet quand une session est ouverte.</param>
     /// <param name="lastFailure">La raison du dernier échec ; nulle quand le pair était simplement absent.</param>
     /// <param name="wasAbsent">Le pair n'était pas au rendez-vous lors du dernier essai.</param>
+    /// <param name="pausedByPeer">Il nous a envoyé un avis de pause, qu'aucune session n'a encore effacé.</param>
     /// <remarks>
     /// Calculée par le moteur plutôt que devinée par l'interface : jusqu'au 26
     /// septembre, l'interface ne regardait que l'existence d'une session, et
     /// un pair recherché au rendez-vous s'affichait « hors ligne ».
     /// </remarks>
     public static PeerPhase Of(bool dialing, bool hasSession, DateTimeOffset now, DateTimeOffset nextAttempt,
-                               string? lastFailure, bool wasAbsent, PeerView view, bool applied)
+                               string? lastFailure, bool wasAbsent, bool pausedByPeer, PeerView view, bool applied)
     {
         if (hasSession is false)
         {
+            // La pause avant tout : pendant les essais qui la suivent, il est
+            // tour à tour recherché, absent ou en échec, et c'est elle seule
+            // qui dit pourquoi.
+            if (pausedByPeer)
+                return PeerPhase.PausedByPeer;
+
             // Absent jusqu'à preuve du contraire, même pendant l'essai suivant :
             // un ami hors ligne est recherché vingt-cinq secondes sur trente, et
             // sa ligne clignoterait sinon entre « recherche » et « absent ».

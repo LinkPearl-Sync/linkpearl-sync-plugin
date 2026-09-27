@@ -252,7 +252,7 @@ public sealed class SyncEngine : IAsyncDisposable
             entry.Value.Pair.Group?.Group,
             PeerPhases.Of(
                 entry.Value.Dial is not null, entry.Value.Session is not null, _clock.UtcNow,
-                entry.Value.NextAttempt, entry.Value.LastFailure, entry.Value.WasAbsent,
+                entry.Value.NextAttempt, entry.Value.LastFailure, entry.Value.WasAbsent, false,
                 entry.Value.Exchange?.View ?? EmptyView, entry.Value.AppliedOn is not null)))
         .ToList();
 
