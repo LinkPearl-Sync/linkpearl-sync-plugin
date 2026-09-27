@@ -184,6 +184,9 @@ Pendant les essais en jeu de la refonte, hors du plan :
   la rappelle tant qu'aucune n'a été faite ou restaurée sur ce PC.
 - La barre d'état dit « En ligne » ou « Hors ligne » en toutes lettres, et le
   nom du monde plutôt que son numéro.
+- **Une pause se dit** (#23) : mis en pause pendant une session, un pair
+  l'apprend par un message `Pause` (0x11), le retient dans son carnet et
+  l'affiche, jusqu'à la session suivante. Hors session, rien ne part.
 
 ## Ce qui reste de mémoire
 
@@ -219,9 +222,6 @@ Pendant les essais en jeu de la refonte, hors du plan :
   groupes**, et plus tôt au fil des fenêtres : c'est la limite de
   `MaxMailboxesPerSession` du rendez-vous. À relever avant la généralisation.
 
-- **Une pause ne se voit pas de l'autre côté.** Celui qu'on met en pause nous
-  voit « absent », comme si l'on avait quitté le jeu. Le dire demanderait un
-  avis de pause dans le protocole.
 - **`Une_session_qui_tombe_se_rejoint_sans_attendre` est intermittent** : une
   fois sur une vingtaine, sous la charge de toute la suite. Il laisse environ
   400 ms de temps réel à une poignée de main qui tourne sur le pool de threads ;
@@ -239,6 +239,9 @@ Pendant les essais en jeu de la refonte, hors du plan :
 
 ## Ce qui attend l'utilisateur en jeu
 
+- **L'avis de pause**, à deux personnages : mettre l'autre en pause pendant
+  une session, lire « vous a mis en pause » chez lui, recharger son plugin (la
+  marque reste), reprendre (elle s'efface).
 - Les **groupes privés**, à deux personnages : créer un groupe, le rejoindre
   par mot de passe puis par validation, exclure un membre, dissoudre.
 - **Public**, à deux personnages : activé d'un côté puis des deux, effets

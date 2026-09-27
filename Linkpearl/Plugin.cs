@@ -694,6 +694,7 @@ public sealed class Plugin : IDalamudPlugin
             Report($"{pair.DisplayName} a mis fin au pairage.");
         };
         _engine.RevocationDelivered += _ => _pairing.Save();
+        _engine.BookChanged += () => _pairing.Save();
 
         var pairs = _pairing.Book.Listed.Count;
 

@@ -286,6 +286,7 @@ internal sealed class PairsPage(
            {
                PeerPhase.Applied                       => Theme.Online,
                PeerPhase.Searching or PeerPhase.Failing => Theme.Idle,
+               PeerPhase.PausedByPeer                   => Theme.Idle,
                PeerPhase.Absent                        => Theme.TextFaint,
                _                                       => Theme.Accent,
            };
@@ -347,6 +348,12 @@ internal sealed class PairsPage(
             case PeerPhase.Searching:
                 Chip.Draw("recherche…", Theme.Idle, Icons.Waiting);
                 Feedback.TooltipOnHover("Linkpearl essaie de joindre ce pair. Cela peut prendre jusqu'à 25 secondes.");
+                return;
+
+            case PeerPhase.PausedByPeer:
+                Chip.Draw("vous a mis en pause", Theme.Idle, Icons.Paused);
+                Feedback.TooltipOnHover(
+                    "Il vous reprendra quand il le voudra ; la synchronisation reviendra alors d'elle-même.");
                 return;
 
             case PeerPhase.Absent:
