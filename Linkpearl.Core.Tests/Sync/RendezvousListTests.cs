@@ -77,4 +77,86 @@ public class RendezvousListTests
 
         Assert.Same(current, RendezvousList.RenameRetiredDefault(current));
     }
+
+    private static RendezvousEntry Entry(string host, int port = 47900, string label = "", bool enabled = true)
+        => new(new RendezvousAddress(host, port), label, enabled);
+
+    [Fact]
+    public void La_liste_d_origine_recoit_le_service_de_secours()
+    {
+        var current = new[] { Entry(RendezvousList.DefaultHost) };
+
+        var completed = RendezvousList.AddBackupDefault(current);
+
+        Assert.Equal([current[0], Entry(RendezvousList.BackupHost)], completed);
+    }
+
+    [Fact]
+    public void Une_liste_composee_a_la_main_ne_recoit_rien()
+    {
+        // Le secours ne s'ajoute qu'à la liste que le plugin a posée lui-même :
+        // un choix fait depuis, même proche, n'est pas le nôtre à compléter.
+        IReadOnlyList<RendezvousEntry>[] composed =
+        [
+            [],
+            [Entry(RendezvousList.DefaultHost, enabled: false)],
+            [Entry(RendezvousList.DefaultHost, label: "Principal")],
+            [Entry(RendezvousList.DefaultHost, port: 443)],
+            [Entry("rdv.ami.ch", 443)],
+            [Entry(RendezvousList.DefaultHost), Entry("rdv.ami.ch", 443)],
+        ];
+
+        foreach (var current in composed)
+            Assert.Same(current, RendezvousList.AddBackupDefault(current));
+    }
+
+    [Fact]
+    public void Une_installation_neuve_recoit_les_deux_services_nommes()
+    {
+        var fresh = RendezvousList.NameDefaults(RendezvousList.AddBackupDefault(
+            RendezvousList.Migrate(RendezvousList.DefaultHost, 47900, null)));
+
+        Assert.Equal(
+            [
+                Entry(RendezvousList.DefaultHost, label: RendezvousList.DefaultLabel),
+                Entry(RendezvousList.BackupHost, label: RendezvousList.BackupLabel),
+            ],
+            fresh);
+    }
+
+    [Fact]
+    public void Les_services_par_defaut_sans_libelle_sont_nommes_dans_toute_liste()
+    {
+        var current = new[]
+        {
+            Entry("rdv.ami.ch", 443),
+            Entry(RendezvousList.BackupHost, enabled: false),
+            Entry(RendezvousList.DefaultHost),
+        };
+
+        var named = RendezvousList.NameDefaults(current);
+
+        // L'ordre, l'interrupteur et les autres services ne bougent pas.
+        Assert.Equal(
+            [
+                current[0],
+                Entry(RendezvousList.BackupHost, label: RendezvousList.BackupLabel, enabled: false),
+                Entry(RendezvousList.DefaultHost, label: RendezvousList.DefaultLabel),
+            ],
+            named);
+    }
+
+    [Fact]
+    public void Un_libelle_saisi_n_est_pas_remplace()
+    {
+        IReadOnlyList<RendezvousEntry>[] untouched =
+        [
+            [Entry(RendezvousList.DefaultHost, label: "Principal")],
+            [Entry(RendezvousList.DefaultHost, port: 443)],
+            [Entry("rdv.ami.ch", 443)],
+        ];
+
+        foreach (var current in untouched)
+            Assert.Same(current, RendezvousList.NameDefaults(current));
+    }
 }

@@ -7,6 +7,11 @@ namespace Linkpearl;
 /// <summary>Réglages du plugin, conservés par Dalamud.</summary>
 public sealed class Configuration : IPluginConfiguration, ICacheConfiguration
 {
+    /// <summary>Génération des réglages, pour les migrations à faire une seule fois.</summary>
+    /// <remarks>
+    /// Reste à 2 par défaut : une installation neuve passe ainsi par les mêmes
+    /// migrations qu'une ancienne, et reçoit le service de secours.
+    /// </remarks>
     public int Version { get; set; } = 2;
 
     /// <summary>
@@ -60,16 +65,23 @@ public sealed class Configuration : IPluginConfiguration, ICacheConfiguration
         var migrated = RendezvousList.RenameRetiredDefault(
             RendezvousList.Migrate(RendezvousHost, RendezvousPort, Rendezvous));
 
+        // Une seule fois : un joueur qui retire ensuite le secours ne doit pas
+        // le voir revenir au chargement suivant.
+        var firstOfV3 = Version < 3;
+
+        if (firstOfV3)
+            migrated = RendezvousList.NameDefaults(RendezvousList.AddBackupDefault(migrated));
+
         var renamed = RendezvousHost == RendezvousList.RetiredDefaultHost;
 
         if (renamed)
             RendezvousHost = RendezvousList.DefaultHost;
 
-        if (ReferenceEquals(migrated, Rendezvous) && renamed is false)
+        if (ReferenceEquals(migrated, Rendezvous) && renamed is false && firstOfV3 is false)
             return;
 
         Rendezvous = [.. migrated];
-        Version = 2;
+        Version = 3;
         Save();
     }
 
