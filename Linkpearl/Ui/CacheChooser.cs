@@ -64,9 +64,9 @@ internal sealed class CacheChooser(CacheKeeper keeper)
         // attente) est ce qui mérite de rester en clair, pas la répéter à
         // chaque image.
         Feedback.Hint(
-            $"Linkpearl n'écrit que dans le sous-dossier {CacheLocation.FolderName}. Les apparences reçues y "
-          + "sont gardées pour ne pas les retélécharger ; au-delà du quota, les plus anciennes partent, jamais "
-          + "celles à l'écran.");
+            "Les apparences reçues sont gardées ici pour ne pas les retélécharger. Linkpearl n'écrit que "
+          + $"dans le sous-dossier {CacheLocation.FolderName}. Quand la taille maximale est atteinte, les plus "
+          + "anciennes sont supprimées, jamais celles des joueurs autour de vous.");
 
         if (_error is { } error)
             Text.Small(error, Theme.Danger);

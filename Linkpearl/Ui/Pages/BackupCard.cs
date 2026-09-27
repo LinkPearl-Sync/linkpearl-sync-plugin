@@ -118,8 +118,8 @@ internal sealed class BackupCard(BackupState state, Action<string, string?> back
         // L'explication de ce que fait une sauvegarde, sortie de la carte :
         // les deux boutons parlent d'eux-mêmes, le pourquoi attend le survol.
         Feedback.Hint(
-            "Tous vos personnages et leurs pairs, dans un seul fichier. Après une réinstallation de "
-          + "Windows ou sur un autre PC, le restaurer évite de refaire chaque pairage.");
+            "Un seul fichier avec vos personnages et vos pairs. Après une réinstallation ou sur un "
+          + "autre PC, le restaurer vous évite de refaire tous vos pairages.");
     }
 
     private void DrawPasswordPrompt(string path)

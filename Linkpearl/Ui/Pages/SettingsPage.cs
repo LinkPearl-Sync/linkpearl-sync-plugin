@@ -76,10 +76,10 @@ internal sealed class SettingsPage(
         var discoverable = configuration.Discoverable;
 
         if (Toggle.Draw("Me signaler aux autres joueurs", ref discoverable, "discoverable",
-                        hint: "Sans cela, personne ne peut vous reconnaître ni vous adresser une demande. Avec, "
-                            + "l'opérateur de chaque service peut savoir que votre personnage est en ligne : pour "
-                            + "qu'un inconnu puisse vous reconnaître, il faut bien que quelque chose soit calculable "
-                            + "à partir de votre nom."))
+                        hint: "Permet aux autres joueurs de Linkpearl de vous voir et de vous envoyer une demande "
+                            + "de pairage. En contrepartie, les services de votre liste savent quand votre personnage "
+                            + "est en ligne. Désactivé, personne de nouveau ne peut vous trouver, et vous ne pouvez "
+                            + "pas rejoindre de groupe."))
         {
             configuration.Discoverable = discoverable;
             configuration.Save();
@@ -104,8 +104,9 @@ internal sealed class SettingsPage(
         var badges = configuration.ShowTransferBadges;
 
         if (Toggle.Draw("Badges de transfert", ref badges, "transfer_badges",
-                        hint: "Un badge aux pieds d'un pair visible dont l'apparence n'est pas encore là : connexion, "
-                            + "attente, réception avec sa progression, application. Il disparaît dès qu'elle est posée."))
+                        hint: "Affiche un petit badge sous un pair tant que son apparence n'est pas arrivée : "
+                            + "connexion, téléchargement avec sa progression, application. Il disparaît une fois "
+                            + "l'apparence posée."))
         {
             configuration.ShowTransferBadges = badges;
             configuration.Save();
@@ -178,9 +179,9 @@ internal sealed class SettingsPage(
         var limited = configuration.LimitUpload;
 
         if (Toggle.Draw("Brider l'envoi", ref limited, "limit_upload",
-                        hint: "Bridé, l'envoi démarre lentement et recule dès que le ping gonfle : une tenue met des "
-                            + "minutes à arriver, mais le jeu reste fluide en donjon. Libre, elle arrive en quelques "
-                            + "secondes, au prix d'un ping plus haut pendant le transfert."))
+                        hint: "Activé, vos envois ralentissent dès que votre ping monte : le jeu reste fluide, utile "
+                            + "en donjon, mais vos amis reçoivent votre tenue en plusieurs minutes. Désactivé, ils la "
+                            + "reçoivent en quelques secondes, avec un ping plus élevé pendant l'envoi."))
             setUploadLimited(limited);
 
         ImGui.Dummy(Theme.S(0f, Theme.GapM));
@@ -190,9 +191,9 @@ internal sealed class SettingsPage(
         ImGui.AlignTextToFramePadding();
         Text.Body("Services de rendez-vous");
         Feedback.Hint(
-            "Ils aident deux joueurs à se trouver et relaient quand la connexion directe échoue. "
-          + "Ils ne voient ni vos fichiers, ni vos apparences, ni vos clés. Vous ne verrez que les "
-          + "joueurs avec qui vous partagez au moins un service.");
+            "Des serveurs qui mettent les joueurs en relation, et font passer les données quand deux "
+          + "joueurs ne peuvent pas se connecter directement. Ils ne voient ni vos fichiers ni vos "
+          + "apparences. Vous ne voyez que les joueurs qui ont au moins un service en commun avec vous.");
 
         ImGui.Dummy(Theme.S(0f, Theme.GapS));
 
@@ -212,18 +213,18 @@ internal sealed class SettingsPage(
             Add(_newAddress);
 
         Feedback.Hint(
-            "Chaque service activé apprend que votre personnage est en ligne et qui se tient autour "
-          + "de vous. En ajouter augmente vos chances de voir du monde, et le nombre de personnes "
-          + "qui le savent.");
+            "Chaque service de la liste sait quand votre personnage est en ligne et quels joueurs de "
+          + "Linkpearl sont autour de vous. Plus de services, c'est plus de joueurs visibles, mais "
+          + "aussi plus d'opérateurs au courant.");
 
         ImGui.Dummy(Theme.S(0f, Theme.GapS));
 
         var open = configuration.OpenCircle;
 
-        if (Toggle.Draw("Cercle ouvert", ref open, "open_circle",
-                        hint: "Pour les pairs déjà reconnus, passer par des services admis automatiquement "
-                            + "après trois jours d'observation. Ils ne voient jamais passer une clé : le premier "
-                            + "pairage reste sur les services de la liste ci-dessus."))
+        if (Toggle.Draw("Réseau ouvert", ref open, "open_circle",
+                        hint: "Une fois pairé avec quelqu'un, vous vous retrouvez aussi par des serveurs de "
+                            + "bénévoles, admis après trois jours de bon fonctionnement. Ils ne voient ni votre "
+                            + "nom ni vos fichiers, et les demandes de pairage passent toujours par votre liste."))
         {
             configuration.OpenCircle = open;
             configuration.Save();
@@ -286,7 +287,7 @@ internal sealed class SettingsPage(
         ImGui.SameLine(0f, Theme.S(Theme.GapS));
         ImGui.SetCursorPosX(ImGui.GetCursorPosX() + ImGui.GetContentRegionAvail().X - buttons);
 
-        if (Btn.Icon(Icons.Refresh, "discover", tooltip: "Demander à ce service ceux qu'il connaît"))
+        if (Btn.Icon(Icons.Refresh, "discover", tooltip: "Voir les autres services que celui-ci connaît"))
             discover(entry.Address);
 
         ImGui.SameLine(0f, Theme.S(Theme.GapS));

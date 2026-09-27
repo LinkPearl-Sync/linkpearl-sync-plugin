@@ -98,7 +98,7 @@ public sealed class ConsensusFetcher(OpenCircle circle, string path, IPluginLog 
         }
         catch (Exception e) when (ct.IsCancellationRequested is false)
         {
-            log.Information($"Autorité du cercle ouvert injoignable : {e.Message}");
+            log.Information($"Autorité du réseau ouvert injoignable : {e.Message}");
         }
     }
 

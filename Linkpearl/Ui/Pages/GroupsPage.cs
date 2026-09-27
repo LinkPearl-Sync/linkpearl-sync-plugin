@@ -694,7 +694,7 @@ internal sealed class GroupsPage(
             if (Btn.Icon(Icons.Resume, $"resume_{id}", tooltip: "Reprendre"))
                 actions.SetPaused(group.Id, member.Fingerprint, false);
         }
-        else if (Btn.Icon(Icons.Paused, $"pause_{id}", tooltip: "Mettre en pause : la session se ferme et l'apparence est retirée"))
+        else if (Btn.Icon(Icons.Paused, $"pause_{id}", tooltip: "Mettre en pause : la connexion est coupée et son apparence retirée"))
         {
             actions.SetPaused(group.Id, member.Fingerprint, true);
         }
@@ -737,7 +737,7 @@ internal sealed class GroupsPage(
         if (member.PublicKey is not { } key)
         {
             Btn.Icon(Icons.Moderator, $"moderator_{id}", disabled: true,
-                     tooltip: "Il faut l'avoir croisé une fois pour connaître sa clé.");
+                     tooltip: "Possible seulement après l'avoir croisé une fois en jeu : Linkpearl doit d'abord le reconnaître.");
             return;
         }
 

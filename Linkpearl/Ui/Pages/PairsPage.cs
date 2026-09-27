@@ -181,8 +181,8 @@ internal sealed class PairsPage(
             ImGui.SameLine(0f, Theme.S(Theme.GapS));
             Text.Icon(Icons.Warning, Theme.Danger);
             Feedback.TooltipOnHover(
-                "Ce pair annonce un autre personnage que celui auprès duquel vous vous êtes pairés. "
-              + "Rien ne lui est appliqué.");
+                "Ce pair utilise un autre personnage que celui avec lequel vous vous êtes pairés. "
+              + "Son apparence n'est pas appliquée.");
         }
         else if (status is { LastFailure: { } failure })
         {
@@ -202,7 +202,7 @@ internal sealed class PairsPage(
             if (Btn.Icon(Icons.Resume, $"resume_{id}", tooltip: "Reprendre"))
                 setPaused(pair.Id, false);
         }
-        else if (Btn.Icon(Icons.Paused, $"pause_{id}", tooltip: "Mettre en pause : la session se ferme et l'apparence est retirée"))
+        else if (Btn.Icon(Icons.Paused, $"pause_{id}", tooltip: "Mettre en pause : la connexion est coupée et son apparence retirée"))
         {
             setPaused(pair.Id, true);
         }
@@ -212,7 +212,7 @@ internal sealed class PairsPage(
         var canReapply = Linked(status);
 
         if (Btn.Icon(Icons.Refresh, $"reapply_{id}",
-                     tooltip: canReapply ? "Réappliquer : redemander la dernière apparence et la reposer" : "Pas encore relié",
+                     tooltip: canReapply ? "Réappliquer : redemander la dernière apparence et la reposer" : "Pas encore connecté",
                      disabled: canReapply is false))
             reapply(pair.Id);
 
@@ -313,12 +313,12 @@ internal sealed class PairsPage(
         // relais choisi d'emblée garde la nôtre pour nous. Le dire autrement
         // promettrait une protection qui n'a pas eu lieu.
         var privacy = pair.Policy is ConnectionPolicy.RelayOnly
-            ? "Votre adresse IP n'a pas été communiquée à ce pair."
-            : "La connexion directe a échoué, mais vos adresses ont été échangées pendant la tentative.";
+            ? "Votre adresse IP n'a pas été transmise à ce pair."
+            : "La connexion directe a échoué, mais vos adresses IP ont été échangées pendant l'essai.";
 
         Text.Icon(Icons.Relayed, Theme.TextFaint);
         Feedback.TooltipOnHover(
-            $"Via le relais du rendez-vous{latency}. Le service transporte sans pouvoir lire. {privacy}");
+            $"Connexion relayée par un service{latency} : les données passent par lui, chiffrées, sans qu'il puisse les lire. {privacy}");
     }
 
     /// <summary>La puce d'état, qui résume ce que le moteur sait du pair.</summary>
@@ -346,14 +346,14 @@ internal sealed class PairsPage(
         {
             case PeerPhase.Searching:
                 Chip.Draw("recherche…", Theme.Idle, Icons.Waiting);
-                Feedback.TooltipOnHover("Linkpearl le cherche au rendez-vous. Cela prend jusqu'à 25 secondes.");
+                Feedback.TooltipOnHover("Linkpearl essaie de joindre ce pair. Cela peut prendre jusqu'à 25 secondes.");
                 return;
 
             case PeerPhase.Absent:
                 Chip.Draw("absent", Theme.TextFaint, Icons.Waiting);
                 Feedback.TooltipOnHover(
-                    "Il n'était pas au rendez-vous : hors ligne, ou il vous a mis en pause. "
-                  + "Linkpearl continue de le chercher toutes les 30 secondes.");
+                    "Ce pair ne répond pas : il est hors ligne, ou il vous a mis en pause. "
+                  + "Linkpearl réessaie toutes les 30 secondes.");
                 return;
 
             case PeerPhase.Failing:

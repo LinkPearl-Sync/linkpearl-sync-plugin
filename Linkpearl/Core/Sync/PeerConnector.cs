@@ -264,7 +264,7 @@ public sealed class PeerConnector(
         }
 
         var viaOpen = open.Contains(match.Value.At);
-        log.Info($"{pair.DisplayName} : apparié sur {match.Value.At}{(viaOpen ? " (cercle ouvert)" : "")}.");
+        log.Info($"{pair.DisplayName} : apparié sur {match.Value.At}{(viaOpen ? " (réseau ouvert)" : "")}.");
 
         if (TryOpenCandidates(pair.PairSecret, match.Value.Theirs, out var plain) is false)
             return new ConnectionAttempt(
