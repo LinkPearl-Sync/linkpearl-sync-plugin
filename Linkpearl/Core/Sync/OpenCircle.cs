@@ -9,6 +9,9 @@ public interface IOpenCircle
 {
     /// <summary>Les services ouverts de cette paire, ou rien si elle doit rester dans l'ancrage.</summary>
     IReadOnlyList<RendezvousAddress> PlacesFor(PairRecord pair);
+
+    /// <summary>La liste où puiser les relais de cette paire, vide si elle n'a pas droit au cercle ouvert.</summary>
+    IReadOnlyList<ConsensusEntry> RelayEntriesFor(PairRecord pair) => [];
 }
 
 /// <summary>
@@ -61,6 +64,9 @@ public sealed class OpenCircle(IReadOnlyList<byte[]> trustedKeys, IClock clock) 
 
     public IReadOnlyList<RendezvousAddress> PlacesFor(PairRecord pair)
         => Enabled && MayUse(pair) && Current is { } list ? ServicePlacement.Choose(pair.PairSecret, list.Entries) : [];
+
+    public IReadOnlyList<ConsensusEntry> RelayEntriesFor(PairRecord pair)
+        => Enabled && MayUse(pair) && Current is { } list ? list.Entries : [];
 
     /// <summary>
     /// Vrai si la clé de ce pair ne peut plus être substituée par un service.
