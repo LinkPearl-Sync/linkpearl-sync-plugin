@@ -230,7 +230,7 @@ public sealed class PeerConnector(
         var open = circle?.PlacesFor(pair) ?? [];
 
         if (pair.Rendezvous.Count == 0 && open.Count == 0)
-            return new ConnectionAttempt(null, false, "aucun lieu de rendez-vous enregistré pour ce pair");
+            return new ConnectionAttempt(null, false, "aucun service connu pour ce pair");
 
         // Un pair en relais seul ne reçoit aucune de nos adresses : c'est tout
         // l'objet de ce mode. Il nous trouve quand même, par le relais.
@@ -260,7 +260,7 @@ public sealed class PeerConnector(
             // et dire « hors ligne » enverrait attendre pour rien.
             return dialer.Reached > 0
                 ? new ConnectionAttempt(null, true, null)
-                : new ConnectionAttempt(null, false, "aucun lieu de rendez-vous commun joignable");
+                : new ConnectionAttempt(null, false, "aucun service commun disponible");
         }
 
         var viaOpen = open.Contains(match.Value.At);

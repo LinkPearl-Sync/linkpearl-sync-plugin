@@ -36,7 +36,7 @@ internal sealed class PairsPage(
     public void Draw()
     {
         Text.PageHeader("Pairs",
-            "Ce que chacun vous montre, et où en est le transfert.");
+            "Apparence affichée par chaque pair et état du transfert.");
 
         var pairs = pairing.Book.Listed;
 
@@ -45,8 +45,8 @@ internal sealed class PairsPage(
             Feedback.EmptyState(
                 Icons.Pairs,
                 "Aucun pair",
-                "Allez dans « Autour de vous » et demandez le pairage à quelqu'un qui utilise Linkpearl, "
-              + "ou restaurez une sauvegarde depuis les réglages.");
+                "Ouvrir « À proximité » et demander le pairage à un joueur Linkpearl, "
+              + "ou restaurer une sauvegarde depuis les réglages.");
 
             return;
         }
@@ -84,12 +84,12 @@ internal sealed class PairsPage(
         // que le moteur est en train de chercher, et ceux dont l'essai a échoué.
         // La puce de chacun dit lequel.
         Group("En ligne", online, byPeer, defaultOpen: true);
-        Group("En attente de lien", offline, byPeer, defaultOpen: true);
+        Group("Connexion en attente", offline, byPeer, defaultOpen: true);
         Group("En pause", paused, byPeer, defaultOpen: false);
         Group("Bloqués", blocked, byPeer, defaultOpen: false);
 
         if (shown.Count == 0)
-            Text.Small("aucun pair ne correspond au filtre.", Theme.TextFaint);
+            Text.Small("Aucun pair ne correspond au filtre.", Theme.TextFaint);
     }
 
     /// <summary>
@@ -107,9 +107,9 @@ internal sealed class PairsPage(
 
         using (Card.Begin("backup_nudge", interactive: false))
         {
-            Text.WithIcon(Icons.Backup, "Pensez à sauvegarder", Theme.Idle, Theme.Text);
+            Text.WithIcon(Icons.Backup, "Sauvegarde recommandée", Theme.Idle, Theme.Text);
             ImGui.Dummy(Theme.S(0f, Theme.GapXs));
-            Text.Wrapped("Vos pairs sont liés à ce PC. Sans sauvegarde, une réinstallation de Windows "
+            Text.Wrapped("Les pairages sont liés à ce PC. Sans sauvegarde, une réinstallation de Windows "
                        + "oblige à refaire chaque pairage.", Theme.TextMuted);
             ImGui.Dummy(Theme.S(0f, Theme.GapS));
 
@@ -140,7 +140,7 @@ internal sealed class PairsPage(
 
         ImGui.TableSetupColumn("état", ImGuiTableColumnFlags.WidthFixed, ImGui.GetFrameHeight());
         ImGui.TableSetupColumn("nom", ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableSetupColumn("statut", ImGuiTableColumnFlags.WidthFixed, Theme.S(190f));
+        ImGui.TableSetupColumn("statut", ImGuiTableColumnFlags.WidthFixed, Theme.S(220f));
         ImGui.TableSetupColumn("actions", ImGuiTableColumnFlags.WidthFixed, (ImGui.GetFrameHeight() * 4f) + Theme.S(Theme.GapS * 3f));
 
         foreach (var pair in pairs)
@@ -181,14 +181,14 @@ internal sealed class PairsPage(
             ImGui.SameLine(0f, Theme.S(Theme.GapS));
             Text.Icon(Icons.Warning, Theme.Danger);
             Feedback.TooltipOnHover(
-                "Ce pair utilise un autre personnage que celui avec lequel vous vous êtes pairés. "
+                "Ce pair utilise un autre personnage que lors du pairage. "
               + "Son apparence n'est pas appliquée.");
         }
-        else if (status is { LastFailure: { } failure })
+        else if (status?.LastFailure is not null)
         {
             ImGui.SameLine(0f, Theme.S(Theme.GapS));
             Text.Icon(Icons.Warning, Theme.Idle);
-            Feedback.TooltipOnHover(failure);
+            Feedback.TooltipOnHover(FailureHint);
         }
 
         ImGui.TableNextColumn();
@@ -202,7 +202,7 @@ internal sealed class PairsPage(
             if (Btn.Icon(Icons.Resume, $"resume_{id}", tooltip: "Reprendre"))
                 setPaused(pair.Id, false);
         }
-        else if (Btn.Icon(Icons.Paused, $"pause_{id}", tooltip: "Mettre en pause : la connexion est coupée et son apparence retirée"))
+        else if (Btn.Icon(Icons.Paused, $"pause_{id}", tooltip: "Mettre en pause : fermer la connexion et retirer l'apparence"))
         {
             setPaused(pair.Id, true);
         }
@@ -212,7 +212,7 @@ internal sealed class PairsPage(
         var canReapply = Linked(status);
 
         if (Btn.Icon(Icons.Refresh, $"reapply_{id}",
-                     tooltip: canReapply ? "Réappliquer : redemander la dernière apparence et la reposer" : "Pas encore connecté",
+                     tooltip: canReapply ? "Réappliquer : demander et afficher de nouveau la dernière apparence" : "Pas encore relié",
                      disabled: canReapply is false))
             reapply(pair.Id);
 
@@ -254,7 +254,7 @@ internal sealed class PairsPage(
 
         if (Btn.Icon(Icons.Effects, $"effects_{id}",
                      tone: limited ? BtnTone.Secondary : BtnTone.Ghost,
-                     tooltip: limited ? "Animations, VFX et sons : certains sont bloqués pour ce pair"
+                     tooltip: limited ? "Animations, VFX ou sons de ce pair bloqués"
                                       : "Animations, VFX et sons reçus de ce pair"))
             ImGui.OpenPopup($"effets_{id}");
 
@@ -306,7 +306,7 @@ internal sealed class PairsPage(
         if (route.Relayed is false)
         {
             Text.Icon(Icons.Direct, Theme.TextFaint);
-            Feedback.TooltipOnHover($"Connexion directe{latency}. Ce pair connaît votre adresse IP.");
+            Feedback.TooltipOnHover($"Connexion directe{latency}. L'adresse IP est visible par ce pair.");
             return;
         }
 
@@ -314,12 +314,12 @@ internal sealed class PairsPage(
         // relais choisi d'emblée garde la nôtre pour nous. Le dire autrement
         // promettrait une protection qui n'a pas eu lieu.
         var privacy = pair.Policy is ConnectionPolicy.RelayOnly
-            ? "Votre adresse IP n'a pas été transmise à ce pair."
-            : "La connexion directe a échoué, mais vos adresses IP ont été échangées pendant l'essai.";
+            ? "Adresse IP non communiquée à ce pair."
+            : "Échec de la connexion directe. Les adresses IP ont été échangées pendant la tentative.";
 
         Text.Icon(Icons.Relayed, Theme.TextFaint);
         Feedback.TooltipOnHover(
-            $"Connexion relayée par un service{latency} : les données passent par lui, chiffrées, sans qu'il puisse les lire. {privacy}");
+            $"Connexion via un service Linkpearl{latency}. Le service transmet les données sans pouvoir les lire. {privacy}");
     }
 
     /// <summary>La puce d'état, qui résume ce que le moteur sait du pair.</summary>
@@ -347,35 +347,35 @@ internal sealed class PairsPage(
         {
             case PeerPhase.Searching:
                 Chip.Draw("recherche…", Theme.Idle, Icons.Waiting);
-                Feedback.TooltipOnHover("Linkpearl essaie de joindre ce pair. Cela peut prendre jusqu'à 25 secondes.");
+                Feedback.TooltipOnHover("Recherche du pair par Linkpearl. Durée maximale : 25 secondes.");
                 return;
 
             case PeerPhase.PausedByPeer:
-                Chip.Draw("vous a mis en pause", Theme.Idle, Icons.Paused);
+                Chip.Draw("mis en pause par ce joueur", Theme.Idle, Icons.Paused);
                 Feedback.TooltipOnHover(
-                    "Il vous reprendra quand il le voudra ; la synchronisation reviendra alors d'elle-même.");
+                    "La synchronisation reprendra dès que ce joueur enlèvera la pause.");
                 return;
 
             case PeerPhase.Absent:
-                Chip.Draw("absent", Theme.TextFaint, Icons.Waiting);
+                Chip.Draw("hors ligne ou en pause", Theme.TextFaint, Icons.Waiting);
                 Feedback.TooltipOnHover(
-                    "Ce pair ne répond pas : il est hors ligne, ou il vous a mis en pause. "
-                  + "Linkpearl réessaie toutes les 30 secondes.");
+                    "Ce joueur n'est pas joignable : il est hors ligne ou vous a mis en pause. "
+                  + "Nouvelle recherche automatique toutes les 30 secondes.");
                 return;
 
             case PeerPhase.Failing:
-                // Court : la colonne fait 190 px, et un libellé rogné perdait
+                // Court : la colonne est étroite, et un libellé rogné perdrait
                 // justement le compte à rebours. L'échec se dit dans l'infobulle.
                 Chip.Draw($"réessai {Countdown(status.NextAttempt)}", Theme.Idle, Icons.Warning);
-                Feedback.TooltipOnHover($"Échec de la dernière tentative : {status.LastFailure ?? "raison inconnue"}.");
+                Feedback.TooltipOnHover(FailureHint);
                 return;
 
             case PeerPhase.Applied:
-                Chip.Draw("apparence posée", Theme.Online, Icons.Applied);
+                Chip.Draw("apparence appliquée", Theme.Online, Icons.Applied);
                 return;
 
             case PeerPhase.OutOfView:
-                Chip.Draw("prêt, hors de vue", Theme.Accent, Icons.Connected);
+                Chip.Draw("prêt quand le joueur sera visible", Theme.Accent, Icons.Connected);
                 return;
 
             case PeerPhase.Receiving:
@@ -386,10 +386,13 @@ internal sealed class PairsPage(
                 return;
 
             default:
-                Chip.Draw("attend son apparence", Theme.Accent, Icons.Connected);
+                Chip.Draw("attend les données d'apparence", Theme.Accent, Icons.Connected);
                 return;
         }
     }
+
+    private const string FailureHint =
+        "La dernière synchronisation a échoué. Réappliquer l'apparence ou consulter le journal si le problème persiste.";
 
     /// <summary>« dans 12 s », « dans 3 min », ou « imminent ».</summary>
     private static string Countdown(DateTimeOffset? next)

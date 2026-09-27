@@ -94,8 +94,8 @@ internal static class TitleBar
                 var at = new Vector2(MathF.Round(position.X - (side + margin) * (i + 1)), position.Y);
 
                 if (IconButton(dl, at, side, icon, $"shell_receive_{i}", struck: on is false,
-                               tooltip: on ? $"Reçoit {what} de vos pairs. Cliquer pour les bloquer."
-                                           : $"{char.ToUpperInvariant(what[0])}{what[1..]} de vos pairs sont bloqués. Cliquer pour les recevoir."))
+                               tooltip: on ? $"Reçoit {what} des pairs. Cliquer pour bloquer."
+                                           : $"{char.ToUpperInvariant(what[0])}{what[1..]} des pairs sont bloqués. Cliquer pour les recevoir."))
                     setReceive(with(on is false));
             }
         }

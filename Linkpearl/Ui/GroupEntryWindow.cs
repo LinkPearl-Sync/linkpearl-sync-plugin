@@ -119,7 +119,7 @@ public sealed class GroupEntryWindow : ThemedWindow
     {
         FollowCandidacy();
 
-        Text.Small("Le code se reçoit d'un propriétaire ou d'un modérateur du groupe.", Theme.TextMuted);
+        Text.Small("Code fourni par le propriétaire ou un modérateur du groupe.", Theme.TextMuted);
         ImGui.Dummy(Theme.S(0f, Theme.GapS));
 
         ImGui.SetNextItemWidth(-1f);
@@ -148,7 +148,7 @@ public sealed class GroupEntryWindow : ThemedWindow
         }
 
         ImGui.Dummy(Theme.S(0f, Theme.GapXs));
-        Text.Small("Laissez le mot de passe vide si le groupe valide chaque entrée.", Theme.TextFaint);
+        Text.Small("Laisser vide si chaque entrée doit être validée.", Theme.TextFaint);
 
         if (TryDescribe(_candidate, out var status, out var color) is false)
             return;
@@ -218,7 +218,7 @@ public sealed class GroupEntryWindow : ThemedWindow
 
     private void DrawCreate()
     {
-        Text.Small("Vous en serez le propriétaire : vous distribuez le code et décidez qui entre.", Theme.TextMuted);
+        Text.Small("Le créateur devient propriétaire du groupe, distribue le code et gère les entrées.", Theme.TextMuted);
         ImGui.Dummy(Theme.S(0f, Theme.GapS));
 
         // Le tampon en octets, la limite en caractères : un nom accentué de
@@ -252,8 +252,8 @@ public sealed class GroupEntryWindow : ThemedWindow
         // absence, qui choisit le mode d'admission du groupe à sa naissance.
         ImGui.Dummy(Theme.S(0f, Theme.GapXs));
         Text.Small(_createPassword.Length == 0
-                       ? "Sans mot de passe, chaque entrée devra être validée par vous ou un modérateur."
-                       : "Avec le code et ce mot de passe, n'importe qui entrera sans attendre personne.",
+                       ? "Sans mot de passe, chaque entrée nécessite la validation du propriétaire ou d'un modérateur."
+                       : "Avec le code et le mot de passe, l'entrée est immédiate.",
                    Theme.TextFaint);
     }
 
@@ -269,17 +269,17 @@ public sealed class GroupEntryWindow : ThemedWindow
         (text, color) = candidate.State switch
         {
             CandidacyState.Waiting       => ("Demande envoyée, en attente de la réponse du groupe.", Theme.Accent),
-            CandidacyState.NeedsPassword => ("Ce groupe demande un mot de passe. Saisissez-le et relancez.", Theme.Idle),
+            CandidacyState.NeedsPassword => ("Ce groupe demande un mot de passe. Le saisir, puis réessayer.", Theme.Idle),
             CandidacyState.Proving       => ("Mot de passe envoyé…", Theme.Accent),
             CandidacyState.Refused       => (candidate.RefusalReason switch
             {
                 RefusalReason.WrongPassword   => "Mot de passe incorrect.",
-                RefusalReason.TooManyAttempts => "Trop d'essais : réessayez dans une demi-heure.",
-                _                             => "Un modérateur a refusé votre demande.",
+                RefusalReason.TooManyAttempts => "Trop d'essais. Réessayer dans une demi-heure.",
+                _                             => "Demande refusée par un modérateur.",
             }, Theme.Danger),
-            CandidacyState.Expired => ("Personne n'a répondu en dix minutes. Un membre doit être en ligne.", Theme.Idle),
+            CandidacyState.Expired => ("Aucune réponse après dix minutes. Au moins un membre doit être en ligne.", Theme.Idle),
             CandidacyState.Idle when candidate.LastJoinedName is { } name
-                => ($"Vous avez rejoint {Glyphs.Safe(name)}.", Theme.Online),
+                => ($"Groupe {Glyphs.Safe(name)} rejoint.", Theme.Online),
             _ => ("", Theme.TextFaint),
         };
 

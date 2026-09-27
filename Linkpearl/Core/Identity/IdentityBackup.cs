@@ -143,7 +143,7 @@ public static class IdentityBackup
     public static BackupReadResult Read(ReadOnlySpan<byte> file, string? password)
     {
         if (file.Length > MaxFileLength)
-            return BackupReadResult.Refused("ce fichier est bien trop gros pour être une sauvegarde Linkpearl.");
+            return BackupReadResult.Refused("fichier trop volumineux pour une sauvegarde Linkpearl.");
 
         if (HasHeader(file) is false)
             return BackupReadResult.Refused("ce fichier n'est pas une sauvegarde Linkpearl.");
@@ -172,7 +172,7 @@ public static class IdentityBackup
         SHA256.HashData(payload, digest);
 
         if (CryptographicOperations.FixedTimeEquals(digest, file[^DigestLength..]) is false)
-            return BackupReadResult.Refused("sauvegarde abîmée : son contenu ne correspond plus à son contrôle.");
+            return BackupReadResult.Refused("sauvegarde endommagée : contenu invalide.");
 
         return Decode(payload, version);
     }
@@ -189,7 +189,7 @@ public static class IdentityBackup
         var iterations = BinaryPrimitives.ReadInt32LittleEndian(header[IterationsOffset..]);
 
         if (iterations is < MinIterations or > MaxIterations)
-            return BackupReadResult.Refused("sauvegarde invalide : paramètres de chiffrement hors bornes.");
+            return BackupReadResult.Refused("sauvegarde invalide : protection incorrecte.");
 
         var key = DeriveKey(password, header, iterations);
 
@@ -199,7 +199,7 @@ public static class IdentityBackup
             {
                 // Un mauvais mot de passe et un fichier altéré sont
                 // indiscernables, et c'est voulu : le dire aiderait qui essaie.
-                return BackupReadResult.Refused("mot de passe incorrect, ou sauvegarde abîmée.", needsPassword: true);
+                return BackupReadResult.Refused("mot de passe incorrect ou sauvegarde endommagée.", needsPassword: true);
             }
 
             try
@@ -253,7 +253,7 @@ public static class IdentityBackup
 
     private static BackupReadResult Decode(ReadOnlySpan<byte> payload, byte version)
     {
-        const string Broken = "sauvegarde invalide : son contenu est mal formé.";
+        const string Broken = "sauvegarde invalide : contenu illisible.";
 
         if (payload.Length < sizeof(ushort))
             return BackupReadResult.Refused(Broken);
@@ -333,16 +333,16 @@ public static class IdentityBackup
                 return "un nom de personnage n'a pas la forme attendue.";
 
             if (seen.Add(entry.Folder) is false)
-                return "le même personnage y figure deux fois.";
+                return "un personnage apparaît deux fois.";
 
             if (entry.Identity.Length is 0 or > MaxIdentityLength)
-                return "une clé d'identité a une taille impossible.";
+                return "une identité est invalide.";
 
             if (entry.Pairs.Length > MaxPairsLength)
-                return "un carnet est trop gros.";
+                return "un carnet est trop volumineux.";
 
             if (entry.Groups is { Length: > MaxGroupsLength })
-                return "une liste de groupes est trop grosse.";
+                return "une liste de groupes est trop volumineuse.";
         }
 
         return null;

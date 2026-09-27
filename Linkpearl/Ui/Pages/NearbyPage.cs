@@ -34,17 +34,17 @@ internal sealed class NearbyPage(
         var users  = state.Nearby.Where(player => presence.Detected.ContainsKey(player.Fingerprint)).ToList();
         var others = state.Nearby.Count - users.Count;
 
-        Text.PageHeader("Autour de vous",
-            "Les joueurs à portée qui utilisent Linkpearl et se laissent trouver.");
+        Text.PageHeader("À proximité",
+            "Joueurs à portée utilisant Linkpearl et visibles par les autres.");
 
         if (users.Count == 0)
         {
             Feedback.EmptyState(
                 Icons.Nearby,
-                "Personne qui utilise Linkpearl",
+                "Aucun joueur Linkpearl à proximité",
                 others > 0
                     ? $"{others} joueur{(others > 1 ? "s" : "")} à portée, aucun ne se signale."
-                    : "Rapprochez-vous de quelqu'un : la liste suit ce que votre personnage voit.");
+                    : "Se rapprocher d'un joueur. La liste suit les personnages visibles en jeu.");
 
             return;
         }
@@ -74,7 +74,7 @@ internal sealed class NearbyPage(
         Group("Déjà pairés", paired, isPaired: true);
 
         if (shown.Count == 0)
-            Text.Small("aucun joueur ne correspond au filtre.", Theme.TextFaint);
+            Text.Small("Aucun joueur ne correspond au filtre.", Theme.TextFaint);
 
         if (others == 0)
             return;
@@ -147,7 +147,7 @@ internal sealed class NearbyPage(
         // joueurs à portée feraient huit oranges qui ne désignent plus rien.
         if (Btn.Draw(sent ? "Renvoyer" : "Demander", sent ? BtnTone.Ghost : BtnTone.Secondary,
                      BtnSize.Small, Icons.Invite,
-                     tooltip: sent ? "Demande déjà envoyée, sans réponse pour l'instant" : "Demander le pairage",
+                     tooltip: sent ? "Demande déjà envoyée. Réponse en attente." : "Demander le pairage",
                      id: $"pair_{id}"))
             requestPair(player);
     }

@@ -64,9 +64,9 @@ internal sealed class CacheChooser(CacheKeeper keeper)
         // attente) est ce qui mérite de rester en clair, pas la répéter à
         // chaque image.
         Feedback.Hint(
-            "Les apparences reçues sont gardées ici pour ne pas les retélécharger. Linkpearl n'écrit que "
-          + $"dans le sous-dossier {CacheLocation.FolderName}. Quand la taille maximale est atteinte, les plus "
-          + "anciennes sont supprimées, jamais celles des joueurs autour de vous.");
+            $"Linkpearl utilise uniquement le sous-dossier {CacheLocation.FolderName}. Les apparences reçues y "
+          + "restent pour éviter un nouveau téléchargement. Une fois le quota atteint, les plus anciennes sont supprimées, sauf "
+          + "celles affichées à l'écran.");
 
         if (_error is { } error)
             Text.Small(error, Theme.Danger);
@@ -78,6 +78,8 @@ internal sealed class CacheChooser(CacheKeeper keeper)
     {
         var quota = ShownQuotaGiB;
 
+        Text.Label("Taille maximale du cache");
+        ImGui.Dummy(Theme.S(0f, Theme.GapXs));
         ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X);
 
         if (ImGui.SliderInt("##cache_quota", ref quota, CacheKeeper.MinQuotaGiB, CacheKeeper.MaxQuotaGiB, "%d Go"))
@@ -109,7 +111,7 @@ internal sealed class CacheChooser(CacheKeeper keeper)
             : $"≈ {appearances} apparences · {Format(free)} libres", Theme.TextFaint);
 
         if (free >= 0 && ShownQuotaGiB * CacheKeeper.GiB > free)
-            Text.Small("Le quota dépasse l'espace libre : le cache s'arrêtera avant, faute de place.", Theme.Idle);
+            Text.Small("La taille maximale dépasse l'espace libre. Le cache s'arrêtera une fois le disque plein.", Theme.Idle);
     }
 
     private void OnChosen(bool chosen, string path)
@@ -129,7 +131,8 @@ internal sealed class CacheChooser(CacheKeeper keeper)
             {
                 // Montré, pas avalé : l'utilisateur doit savoir que son choix
                 // n'a pas été retenu.
-                _error = $"échec : {e.Message}";
+                Plugin.Log.Warning($"Choix du dossier du cache en échec ({e.GetType().Name}).");
+                _error = "Choix impossible. Vérifier que le dossier existe et reste accessible.";
             }
             finally
             {

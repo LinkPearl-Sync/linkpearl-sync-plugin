@@ -100,7 +100,7 @@ internal static class Theme
 
     // ─── Statuts ──────────────────────────────────────────────────────────────
 
-    /// <summary>Pair joint et apparence posée.</summary>
+    /// <summary>Pair joint et apparence appliquée.</summary>
     public static readonly Vector4 Online = Hex(0x6FE0B0);
 
     /// <summary>Transfert en cours, ou pair en pause. Jaune et non orange : l'orange est à l'action.</summary>

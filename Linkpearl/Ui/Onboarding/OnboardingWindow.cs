@@ -63,28 +63,29 @@ internal sealed class OnboardingWindow : ThemedWindow
         _steps =
         [
             new("Bienvenue",
-                "Votre apparence moddée, visible par vos amis, directement de joueur à joueur.",
+                "Partagez votre apparence moddée avec vos amis. "
+              + "Un pair est un joueur ajouté à vos contacts Linkpearl.",
                 null),
             new("Comment ça marche",
-                "Vos fichiers passent directement de votre jeu à celui de votre ami, chiffrés. "
-              + "Le rendez-vous vous aide seulement à vous trouver : il ne stocke rien, et rien "
-              + "ne s'échange sans l'accord des deux.",
+                "Les données passent directement entre les joueurs quand c'est possible. Sinon, "
+              + "un service Linkpearl les relaie sans pouvoir les lire. Aucun fichier n'est conservé par le service. "
+              + "Les échanges commencent après acceptation des deux joueurs.",
                 OnboardingArt.HowItWorks),
-            new("Se pairer, en jeu",
-                "Un glyphe à côté du nom signale qui utilise Linkpearl. Clic droit sur le joueur, "
-              + "« demander le pairage », et l'autre accepte d'un clic.",
+            new("Se pairer en jeu",
+                "Une icône à côté du nom indique que le joueur utilise Linkpearl. Faire un clic droit sur le joueur, "
+              + "choisir « demander le pairage », puis attendre son acceptation.",
                 DrawPairing),
-            new("Garder la main",
-                "Mettez un pair en pause, ou bloquez les animations, les effets et les sons, pour "
-              + "tout le monde ou pour un seul pair. Si une apparence se pose mal, « réappliquer » "
-              + "est au clic droit.",
+            new("Contrôler les échanges",
+                "Mettre un pair en pause ou bloquer les animations, les effets visuels (VFX) et les sons, "
+              + "pour tous les pairs ou pour un seul. En cas de problème d'apparence, utiliser « Réappliquer » "
+              + "dans le menu du clic droit.",
                 OnboardingArt.Controls),
-            new("Votre cache",
-                "Les apparences reçues sont gardées sur le disque pour ne pas les retélécharger. "
-              + "Choisissez où, et jusqu'à quelle taille.",
+            new("Cache",
+                "Le cache est le stockage local des apparences reçues. Il évite de les télécharger à nouveau. "
+              + "Choisir son emplacement et sa taille maximale.",
                 DrawCache),
             new("Avant de commencer",
-                "Linkpearl s'appuie sur Penumbra et Glamourer pour poser les apparences.",
+                "Linkpearl utilise Penumbra et Glamourer pour afficher les apparences.",
                 DrawReady),
         ];
     }
@@ -162,14 +163,14 @@ internal sealed class OnboardingWindow : ThemedWindow
         {
             ImGui.Dummy(Theme.S(0f, Theme.GapS));
             Feedback.Alert(Theme.Idle, Icons.Warning,
-                "Sans eux, Linkpearl peut se pairer mais ne pourra rien afficher. Installez-les ou "
-              + "activez-les depuis /xlplugins.");
+                "Sans Penumbra et Glamourer, le pairage fonctionne, mais aucune apparence ne peut être affichée. Les installer ou "
+              + "les activer depuis /xlplugins.");
         }
 
         ImGui.Dummy(Theme.S(0f, Theme.GapL));
         Feedback.Alert(Theme.Accent, Icons.Backup,
-            "Après votre premier pairage, sauvegardez votre identité depuis les réglages : sans cela, "
-          + "une réinstallation obligerait à refaire chaque pairage.");
+            "Après le premier pairage, sauvegarder les personnages et leurs pairages dans les réglages. "
+          + "Sans sauvegarde, chaque pairage devra être refait après une réinstallation.");
     }
 
     private static void Prerequisite(string name, bool ready)

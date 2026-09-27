@@ -71,13 +71,14 @@ internal sealed class BackupCard(BackupState state, Action<string, string?> back
             mismatch = _password != _confirmation;
 
             if (mismatch && _confirmation.Length > 0)
-                Text.Small("les deux mots de passe diffèrent.", Theme.Idle);
+                Text.Small("Les deux mots de passe diffèrent.", Theme.Idle);
         }
         else
         {
             // Dit avant le clic, pas après : ce fichier finira sur un nuage ou
             // dans une conversation. Reste visible (sécurité), une ligne.
-            Text.Small("Sans mot de passe, ce fichier suffit pour se faire passer pour vous.", Theme.Idle);
+            Text.Small("Sans mot de passe, toute personne possédant ce fichier peut reprendre vos personnages et leurs pairages.",
+                       Theme.Idle);
         }
 
         ImGui.Dummy(Theme.S(0f, Theme.GapS));
@@ -87,7 +88,7 @@ internal sealed class BackupCard(BackupState state, Action<string, string?> back
         {
             var password = _password.Length > 0 ? _password : null;
 
-            _dialogs.SaveFileDialog("Sauvegarder l'identité Linkpearl", Filter, "Linkpearl", ".lpbackup",
+            _dialogs.SaveFileDialog("Sauvegarder les personnages et leurs pairages", Filter, "Linkpearl", ".lpbackup",
                 (chosen, destination) =>
                 {
                     // La fenêtre de Dalamud n'ajoute pas l'extension : sans
@@ -103,8 +104,8 @@ internal sealed class BackupCard(BackupState state, Action<string, string?> back
 
         if (Btn.Draw("Restaurer…", BtnTone.Secondary, BtnSize.Small, Icons.Restore,
                      disabled: state.Running, id: "backup_restore",
-                     tooltip: "Remplace l'identité des personnages présents dans le fichier. "
-                            + "L'actuelle est gardée à côté, jamais effacée."))
+                     tooltip: "Remplace les personnages et leurs pairages par ceux de la sauvegarde. "
+                            + "Une copie de l'identité Linkpearl actuelle est conservée."))
         {
             _dialogs.OpenFileDialog("Restaurer une sauvegarde Linkpearl", Filter,
                 (chosen, paths) =>
@@ -118,8 +119,8 @@ internal sealed class BackupCard(BackupState state, Action<string, string?> back
         // L'explication de ce que fait une sauvegarde, sortie de la carte :
         // les deux boutons parlent d'eux-mêmes, le pourquoi attend le survol.
         Feedback.Hint(
-            "Un seul fichier avec vos personnages et vos pairs. Après une réinstallation ou sur un "
-          + "autre PC, le restaurer vous évite de refaire tous vos pairages.");
+            "Tous les personnages et leurs pairs dans un seul fichier. Après une réinstallation de "
+          + "Windows ou un changement de PC, restaurer ce fichier évite de refaire chaque pairage.");
     }
 
     private void DrawPasswordPrompt(string path)

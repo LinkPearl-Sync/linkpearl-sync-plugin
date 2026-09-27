@@ -50,9 +50,9 @@ internal static class StatusBar
 
         // Nommer l'état en toutes lettres : un point n'a jamais rien dit à
         // personne, et le plugin sert pour de bon sans rendez-vous joignable.
-        // « En ligne » plutôt que « connecté » : le mot ne s'accorde pas, et il
-        // fait pendant à « hors ligne ».
-        var state  = status.Connected ? "En ligne" : "Hors ligne";
+        // Il s'agit de la disponibilité du service, pas de celle du plugin :
+        // les sessions déjà établies peuvent continuer sans lui.
+        var state  = status.Connected ? "Service disponible" : "Service indisponible";
         var detail = status.Connected ? status.Character : status.Failure;
         var left   = detail is null ? state : $"{state} · {detail}";
 

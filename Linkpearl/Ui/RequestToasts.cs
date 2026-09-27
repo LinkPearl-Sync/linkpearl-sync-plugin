@@ -137,10 +137,12 @@ internal sealed class RequestToasts : ThemedWindow
         ImGui.Dummy(Theme.S(0f, Theme.GapXs));
 
         Chip.Draw(
-            visible ? "visible autour de vous" : "pas visible d'ici",
+            visible ? "visible à proximité" : "hors de vue",
             visible ? Theme.Online : Theme.Idle,
             visible ? Icons.Character : Icons.Warning);
 
+        ImGui.Dummy(Theme.S(0f, Theme.GapXs));
+        RequestsPage.DrawRecognitionHint(visible);
         ImGui.Dummy(Theme.S(0f, Theme.GapS));
 
         if (Btn.Draw("Accepter", BtnTone.Action, BtnSize.Small, Icons.Accept, id: $"toast_accept_{id}"))
@@ -165,10 +167,12 @@ internal sealed class RequestToasts : ThemedWindow
         ImGui.Dummy(Theme.S(0f, Theme.GapXs));
 
         Chip.Draw(
-            visible ? "visible autour de vous" : "pas visible d'ici",
+            visible ? "visible à proximité" : "hors de vue",
             visible ? Theme.Online : Theme.Idle,
             visible ? Icons.Character : Icons.Warning);
 
+        ImGui.Dummy(Theme.S(0f, Theme.GapXs));
+        RequestsPage.DrawRecognitionHint(visible);
         ImGui.Dummy(Theme.S(0f, Theme.GapS));
 
         if (Btn.Draw("Accepter", BtnTone.Action, BtnSize.Small, Icons.Accept, id: $"toast_admission_accept_{id}"))

@@ -89,14 +89,14 @@ public static class IdentityBackupService
             }
             catch (CryptographicException)
             {
-                return (false, "sauvegarde refusée : une clé d'identité est inutilisable.");
+                return (false, "sauvegarde impossible : identité invalide.");
             }
 
             if (PairBookStore.IsValid(entry.Pairs) is false)
-                return (false, "sauvegarde refusée : un carnet de pairs est illisible.");
+                return (false, "sauvegarde impossible : carnet de pairs illisible.");
 
             if (entry.Groups is not null && GroupBookCodec.IsValid(entry.Groups) is false)
-                return (false, "sauvegarde refusée : une liste de groupes est illisible.");
+                return (false, "sauvegarde impossible : liste de groupes illisible.");
         }
 
         foreach (var entry in entries)

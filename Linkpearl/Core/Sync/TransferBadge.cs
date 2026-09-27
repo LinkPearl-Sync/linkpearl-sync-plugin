@@ -8,7 +8,7 @@ namespace Linkpearl.Core.Sync;
 /// <remarks>
 /// Sans lui, un pair appairé qui garde son apparence par défaut est
 /// indiscernable d'un pair en panne : on ne sait pas s'il faut attendre ou
-/// réappliquer. Rien n'est affiché une fois l'apparence posée ni pour un pair
+/// réappliquer. Rien n'est affiché une fois l'apparence appliquée ni pour un pair
 /// hors ligne, sans quoi le badge deviendrait un décor que plus personne ne lit.
 /// </remarks>
 public sealed record TransferBadge(string Label, float? Progress)
@@ -43,7 +43,7 @@ public sealed record TransferBadge(string Label, float? Progress)
             return null;
 
         return view.Ready
-            ? new TransferBadge("application", null)
+            ? new TransferBadge("application de l'apparence", null)
             : new TransferBadge("en attente", null);
     }
 }

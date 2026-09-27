@@ -38,13 +38,13 @@ internal sealed class GroupsPage(
     /// tôt laisserait des membres dans un groupe qu'ils croient vivant.
     /// </summary>
     private const string DissolveReminder =
-        "Les membres l'apprennent en vous croisant : gardez le groupe dans la liste jusqu'à ce qu'ils l'aient vu.";
+        "Les membres seront informés lors d'une prochaine rencontre. Garder le groupe dans la liste jusque-là.";
 
-    private const string DissolveConsequence = "Le groupe cesse pour tous ses membres. " + DissolveReminder;
+    private const string DissolveConsequence = "Le groupe est supprimé pour tous les membres. " + DissolveReminder;
 
     private const string NewCodeConsequence =
-        "L'ancien code ne mène plus nulle part. Les membres restent ; seuls ceux qui ne sont pas encore "
-      + "entrés devront recevoir le nouveau.";
+        "L'ancien code ne fonctionne plus. Les membres restent dans le groupe. Seuls les nouveaux "
+      + "membres ont besoin du nouveau code.";
 
     private const string ConfirmTooltip = "Cliquer encore dans les quatre secondes pour confirmer.";
 
@@ -95,7 +95,7 @@ internal sealed class GroupsPage(
     public void Draw()
     {
         Text.PageHeader("Groupes",
-            "Un groupe synchronise tous ses membres entre eux, sans les pairer un à un.");
+            "Un groupe partage les apparences entre tous ses membres, sans pairage individuel.");
 
         DrawPublic();
         DrawEntry();
@@ -104,7 +104,7 @@ internal sealed class GroupsPage(
 
         if (all.Count == 0)
         {
-            Feedback.EmptyState(Icons.Groups, "Aucun groupe", "Créez-en un ou rejoignez-en un avec son code.");
+            Feedback.EmptyState(Icons.Groups, "Aucun groupe", "Créer un groupe ou le rejoindre avec son code.");
             return;
         }
 
@@ -118,7 +118,8 @@ internal sealed class GroupsPage(
     }
 
     private const string PublicWarning =
-        "Tout joueur visible qui a aussi activé Public verra votre apparence moddée, et vous la sienne.";
+        "Le Mode public partage votre apparence avec tous les joueurs visibles qui l'ont activé, "
+      + "même si vous ne les connaissez pas.";
 
     /// <summary>Vrai tant que l'avertissement attend sa réponse, avant la première activation.</summary>
     private bool _publicWarningOpen;
@@ -145,8 +146,8 @@ internal sealed class GroupsPage(
 
             ImGui.Dummy(Theme.S(0f, Theme.GapXs));
             Text.Small(enabled
-                           ? "Vous voyez les joueurs visibles qui l'ont activé, et ils vous voient."
-                           : "Seuls vos pairs et vos groupes vous voient.",
+                           ? "Les joueurs visibles avec le Mode public activé partagent leur apparence."
+                           : "L'apparence reste visible uniquement par les pairs et les membres des groupes.",
                        Theme.TextFaint);
 
             if (_publicWarningOpen)
@@ -184,13 +185,13 @@ internal sealed class GroupsPage(
     private void DrawPublicHeader(bool enabled)
     {
         ImGui.AlignTextToFramePadding();
-        Text.WithIcon(Icons.World, "Public", enabled ? Theme.Online : Theme.Accent);
+        Text.WithIcon(Icons.World, "Mode public", enabled ? Theme.Online : Theme.Accent);
 
         ImGui.SameLine(0f, Theme.S(Theme.GapS));
         ImGui.AlignTextToFramePadding();
         Text.Small(enabled ? "activé" : "désactivé", enabled ? Theme.Online : Theme.TextFaint);
 
-        var label = enabled ? "Désactiver" : "Activer";
+        var label = enabled ? "Désactiver le mode public" : "Activer le mode public";
         var icon = enabled ? Icons.Hidden : Icons.World;
 
         ImGui.SameLine(0f, Theme.S(Theme.GapS));
@@ -220,7 +221,7 @@ internal sealed class GroupsPage(
             actions.SetDefaultReceive(PublicGroup.Id, changed);
 
         ImGui.Dummy(Theme.S(0f, Theme.GapXs));
-        Text.Small("Pour les joueurs que vous n'avez pas réglés un par un.", Theme.TextFaint);
+        Text.Small("Réglage utilisé pour les joueurs sans réglage individuel.", Theme.TextFaint);
     }
 
     /// <summary>Les joueurs du Public déjà croisés, repliés par défaut.</summary>
@@ -240,7 +241,7 @@ internal sealed class GroupsPage(
         Feedback.Alert(Theme.Idle, Icons.Warning, PublicWarning);
         ImGui.Dummy(Theme.S(0f, Theme.GapXs));
 
-        if (Btn.Draw("Activer Public", BtnTone.Action, BtnSize.Small, Icons.World, id: "public_confirm"))
+        if (Btn.Draw("Activer le mode public", BtnTone.Action, BtnSize.Small, Icons.World, id: "public_confirm"))
         {
             actions.AcknowledgePublicWarning();
             actions.SetPublic(true);
@@ -431,7 +432,7 @@ internal sealed class GroupsPage(
     }
 
     /// <summary>Replié, le nombre de membres joints : ce qu'on vient chercher sans rouvrir la carte.</summary>
-    /// <remarks>Joint ou apparence posée, la même frontière que la pastille des membres.</remarks>
+    /// <remarks>Joint ou apparence appliquée, la même frontière que la pastille des membres.</remarks>
     private static void DrawOnlineSummary(GroupRecord group, IReadOnlyList<PeerStatus> known)
     {
         var online = 0;
@@ -486,7 +487,7 @@ internal sealed class GroupsPage(
         if (policy is null)
         {
             ImGui.SameLine(0f, Theme.S(Theme.GapS));
-            Chip.Draw("en attente de sa politique", Theme.Idle, Icons.Waiting);
+            Chip.Draw("règles du groupe en attente", Theme.Idle, Icons.Waiting);
         }
     }
 
@@ -527,8 +528,8 @@ internal sealed class GroupsPage(
 
         ImGui.Dummy(Theme.S(0f, Theme.GapXs));
         Text.Small(policy.Attestation.Admission == AdmissionMode.Password
-                       ? "À envoyer par /tell. Avec lui et le mot de passe, n'importe qui entre."
-                       : "À envoyer par /tell. Chaque entrée sera validée par vous ou un modérateur, dans Demandes.",
+                       ? "À envoyer par /tell. Le code et le mot de passe permettent une entrée immédiate."
+                       : "À envoyer par /tell. Chaque entrée doit être validée dans Demandes par le propriétaire ou un modérateur.",
                    Theme.TextFaint);
     }
 
@@ -610,7 +611,7 @@ internal sealed class GroupsPage(
             ImGui.SameLine(0f, Theme.S(Theme.GapS));
 
         if (Confirmed($"leave_{group.Id}", "Quitter le groupe", "Confirmer : quitter", Icons.Leave, BtnTone.Ghost,
-                      "Vous cessez d'échanger vos apparences avec ses membres. Revenir demandera de nouveau le code."))
+                      "Quitter le groupe arrête le partage d'apparences avec ses membres. Le code sera nécessaire pour revenir."))
             actions.Leave(group.Id);
     }
 
@@ -632,7 +633,7 @@ internal sealed class GroupsPage(
 
         ImGui.TableSetupColumn("état", ImGuiTableColumnFlags.WidthFixed, ImGui.GetFrameHeight());
         ImGui.TableSetupColumn("nom", ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableSetupColumn("statut", ImGuiTableColumnFlags.WidthFixed, Theme.S(190f));
+        ImGui.TableSetupColumn("statut", ImGuiTableColumnFlags.WidthFixed, Theme.S(220f));
         ImGui.TableSetupColumn("actions", ImGuiTableColumnFlags.WidthFixed, (ImGui.GetFrameHeight() * 4f) + Theme.S(Theme.GapS * 3f));
 
         foreach (var member in group.Members.Values.OrderBy(member => member.DisplayName, StringComparer.OrdinalIgnoreCase))
@@ -676,11 +677,12 @@ internal sealed class GroupsPage(
             Feedback.TooltipOnHover("Modérateur");
         }
 
-        if (status is { LastFailure: { } failure })
+        if (status?.LastFailure is not null)
         {
             ImGui.SameLine(0f, Theme.S(Theme.GapS));
             Text.Icon(Icons.Warning, Theme.Idle);
-            Feedback.TooltipOnHover(failure);
+            Feedback.TooltipOnHover(
+                "La dernière synchronisation a échoué. Consulter le journal si le problème persiste.");
         }
 
         ImGui.TableNextColumn();
@@ -694,7 +696,7 @@ internal sealed class GroupsPage(
             if (Btn.Icon(Icons.Resume, $"resume_{id}", tooltip: "Reprendre"))
                 actions.SetPaused(group.Id, member.Fingerprint, false);
         }
-        else if (Btn.Icon(Icons.Paused, $"pause_{id}", tooltip: "Mettre en pause : la connexion est coupée et son apparence retirée"))
+        else if (Btn.Icon(Icons.Paused, $"pause_{id}", tooltip: "Mettre en pause : fermer la connexion et retirer l'apparence"))
         {
             actions.SetPaused(group.Id, member.Fingerprint, true);
         }
@@ -737,7 +739,7 @@ internal sealed class GroupsPage(
         if (member.PublicKey is not { } key)
         {
             Btn.Icon(Icons.Moderator, $"moderator_{id}", disabled: true,
-                     tooltip: "Possible seulement après l'avoir croisé une fois en jeu : Linkpearl doit d'abord le reconnaître.");
+                     tooltip: "Une première rencontre en jeu est nécessaire.");
             return;
         }
 
@@ -831,7 +833,7 @@ internal sealed class GroupsPage(
 
         if (Btn.Icon(Icons.Effects, $"effects_{id}",
                      tone: limited ? BtnTone.Secondary : BtnTone.Ghost,
-                     tooltip: limited ? "Animations, VFX et sons : certains sont bloqués pour ce membre"
+                     tooltip: limited ? "Animations, VFX ou sons de ce membre bloqués"
                                       : "Animations, VFX et sons reçus de ce membre"))
             ImGui.OpenPopup($"effets_{id}");
 
@@ -848,7 +850,7 @@ internal sealed class GroupsPage(
         // Un membre du Public réglé à la main ne suit plus le réglage commun :
         // ce bouton l'y ramène.
         if (group.IsPublic && member.Receive is not null
-            && Btn.Draw("Suivre le Public", BtnTone.Ghost, BtnSize.Small, Icons.Refresh, id: $"follow_{id}"))
+            && Btn.Draw("Suivre le mode public", BtnTone.Ghost, BtnSize.Small, Icons.Refresh, id: $"follow_{id}"))
             actions.SetReceive(group.Id, member.Fingerprint, null);
     }
 
@@ -862,7 +864,7 @@ internal sealed class GroupsPage(
                      tone: confirming ? BtnTone.Danger : BtnTone.Ghost,
                      tooltip: confirming
                          ? "Cliquer encore pour bloquer ce joueur"
-                         : "Bloquer : il ne vous verra plus et vous ne le verrez plus, dans le Public."))
+                         : "Bloquer : aucun partage d'apparence avec ce joueur dans le Mode public."))
         {
             if (confirming)
             {
@@ -907,7 +909,7 @@ internal sealed class GroupsPage(
         // lit à sa couleur, et chaque choix porte son icône comme ailleurs.
         if (Btn.Draw("Mot de passe", password ? BtnTone.Selected : BtnTone.Secondary, BtnSize.Small, Icons.Lock,
                      id: "mode_password", disabled: blocked,
-                     tooltip: blocked ? "Définissez d'abord un mot de passe, dans la carte ci-dessous." : null)
+                     tooltip: blocked ? "Définir d'abord un mot de passe dans la carte ci-dessous." : null)
             && password is false)
             actions.Edit(group.Id, (current, _) => GroupGovernance.SetAdmission(current, AdmissionMode.Password));
 
@@ -920,8 +922,8 @@ internal sealed class GroupsPage(
 
         ImGui.Dummy(Theme.S(0f, Theme.GapXs));
         Text.Small(password
-                       ? "Quiconque a le code et le mot de passe entre seul, sans attendre personne."
-                       : "Chaque demande attend qu'un modérateur ou vous l'acceptiez, dans Demandes. "
+                       ? "Le code et le mot de passe permettent une entrée immédiate."
+                       : "Chaque demande attend la validation du propriétaire ou d'un modérateur dans Demandes. "
                        + "Sans personne en ligne pour répondre, elle expire au bout de dix minutes.",
                    Theme.TextFaint);
     }
@@ -961,11 +963,11 @@ internal sealed class GroupsPage(
         ImGui.Dummy(Theme.S(0f, Theme.GapXs));
         Text.Small(defined
                        ? "Les membres actuels ne sont pas touchés ; le nouveau vaut pour les prochaines entrées."
-                       : "Aucun mot de passe pour l'instant. Il n'ouvre la porte qu'en mode mot de passe.",
+                       : "Aucun mot de passe défini. Le mot de passe sert uniquement en mode « Mot de passe ».",
                    Theme.TextFaint);
 
         if (defined && policy.Attestation.Admission == AdmissionMode.Validation)
-            Text.Small("Tant que le groupe valide chaque entrée, le mot de passe ne fait entrer personne.", Theme.Idle);
+            Text.Small("En mode « Validation par un modérateur », le mot de passe ne permet pas d'entrer.", Theme.Idle);
     }
 
     private void DrawBans(GroupRecord group, GroupPolicy policy)
@@ -976,7 +978,7 @@ internal sealed class GroupsPage(
         ImGui.Dummy(Theme.S(0f, Theme.GapS));
 
         if (policy.Bans.Count == 0)
-            Text.Small("Personne n'est exclu.", Theme.TextFaint);
+            Text.Small("Aucun joueur exclu.", Theme.TextFaint);
 
         for (var index = 0; index < policy.Bans.Count; index++)
         {
@@ -996,12 +998,12 @@ internal sealed class GroupsPage(
                 ImGui.SetCursorPosX(ImGui.GetCursorPosX() + room);
 
             if (Btn.Draw("Lever", BtnTone.Ghost, BtnSize.Small, Icons.Accept, id: "unban",
-                         tooltip: "Lever l'exclusion de ce personnage et de sa clé."))
+                         tooltip: "Autoriser de nouveau ce personnage à rejoindre le groupe."))
                 actions.Edit(group.Id, (current, signer) => GroupGovernance.Unban(current, ban, signer));
         }
 
         ImGui.Dummy(Theme.S(0f, Theme.GapXs));
-        Text.Small("On exclut depuis la ligne d'un membre. Un exclu n'est plus synchronisé et ne peut plus rentrer.",
+        Text.Small("Exclure un joueur depuis sa ligne. Le joueur exclu n'est plus synchronisé et ne peut plus rejoindre le groupe.",
                    Theme.TextFaint);
     }
 
@@ -1112,7 +1114,7 @@ internal sealed class GroupsPage(
 
         if (status.Applied)
         {
-            Chip.Draw("apparence posée", Theme.Online, Icons.Applied);
+            Chip.Draw("apparence appliquée", Theme.Online, Icons.Applied);
             return;
         }
 
@@ -1120,7 +1122,7 @@ internal sealed class GroupsPage(
 
         if (view.Ready)
         {
-            Chip.Draw("prêt, hors de vue", Theme.Accent, Icons.Connected);
+            Chip.Draw("prêt quand le joueur sera visible", Theme.Accent, Icons.Connected);
             return;
         }
 

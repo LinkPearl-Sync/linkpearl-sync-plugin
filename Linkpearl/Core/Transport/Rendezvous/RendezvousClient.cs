@@ -330,10 +330,10 @@ public sealed class RendezvousClient : IAsyncDisposable
 
         return frame switch
         {
-            null => "le rendez-vous n'a pas répondu",
+            null => "le service n'a pas répondu",
             [RendezvousKind.TicketAccepted, ..] => null,
             [RendezvousKind.Error, .. var reason] => System.Text.Encoding.UTF8.GetString(reason),
-            _ => "réponse inattendue du rendez-vous",
+            _ => "réponse inattendue du service",
         };
     }
 
@@ -347,10 +347,10 @@ public sealed class RendezvousClient : IAsyncDisposable
 
         return frame switch
         {
-            null => (null, "le rendez-vous n'a pas répondu"),
+            null => (null, "le service n'a pas répondu"),
             [RendezvousKind.TicketPayload, .. var payload] => (payload, null),
             [RendezvousKind.Error, .. var reason] => (null, System.Text.Encoding.UTF8.GetString(reason)),
-            _ => (null, "réponse inattendue du rendez-vous"),
+            _ => (null, "réponse inattendue du service"),
         };
     }
 

@@ -160,7 +160,7 @@ public sealed class PresenceService : IDisposable
 
     /// <summary>Ce qu'on répond tant qu'aucun personnage n'est connecté.</summary>
     private const string NoCharacter =
-        "connectez-vous d'abord : l'identité Linkpearl appartient au personnage, pas à l'installation.";
+        "connexion à un personnage requise : chaque personnage possède sa propre identité Linkpearl.";
 
     /// <summary>Vrai dès qu'un seul service répond.</summary>
     /// <remarks>
@@ -200,12 +200,12 @@ public sealed class PresenceService : IDisposable
     private static string Describe(Exception e) => e switch
     {
         SocketException { SocketErrorCode: SocketError.HostNotFound or SocketError.NoData or SocketError.TryAgain }
-            => "adresse du service introuvable (DNS)",
+            => "adresse du service introuvable",
         SocketException { SocketErrorCode: SocketError.ConnectionRefused }
-            => "le service refuse la connexion",
+            => "connexion refusée par le service",
         SocketException { SocketErrorCode: SocketError.TimedOut }
             => "le service ne répond pas",
-        _ => e.Message,
+        _ => "erreur de connexion au service",
     };
 
     /// <summary>Les empreintes reconnues comme utilisant le plugin, avec leur fraîcheur.</summary>
@@ -455,7 +455,7 @@ public sealed class PresenceService : IDisposable
         {
             lock (_gate)
             {
-                session.Failure = "trop de groupes pour un seul service";
+                session.Failure = "trop de groupes sur ce service";
                 session.NextAttempt = _clock.UtcNow + TimeSpan.FromSeconds(30);
             }
 
@@ -723,7 +723,7 @@ public sealed class PresenceService : IDisposable
     public async Task<string> RequestPairAsync(NearbyPlayer target, NearbyPlayer self, CancellationToken ct)
     {
         if (Connected is false)
-            return "aucun service de rendez-vous joignable.";
+            return "aucun service Linkpearl disponible.";
 
         if (_identity() is not { } identity)
             return NoCharacter;
@@ -782,7 +782,7 @@ public sealed class PresenceService : IDisposable
             }
             catch (Exception e)
             {
-                failure = e.Message;
+                failure = Describe(e);
                 _log.Warning(e, $"Dépôt en échec sur {session.At}.");
             }
         }
@@ -810,7 +810,7 @@ public sealed class PresenceService : IDisposable
         }
 
         var delivered = 0;
-        var failure = "aucun service du groupe n'est joignable";
+        var failure = "aucun service du groupe n'est disponible";
 
         foreach (var session in Snapshot())
         {
@@ -824,7 +824,7 @@ public sealed class PresenceService : IDisposable
             }
             catch (Exception e)
             {
-                failure = e.Message;
+                failure = Describe(e);
                 _log.Warning(e, $"Dépôt d'admission en échec sur {session.At}.");
             }
         }
@@ -853,13 +853,13 @@ public sealed class PresenceService : IDisposable
         // détection tient ouverte : sans elle, la demande partirait et la
         // réponse ne trouverait personne.
         if (_configuration.Discoverable is false)
-            return "Activez la détection dans les réglages : c'est par votre boîte que le groupe vous répond.";
+            return "Activer la visibilité dans les réglages pour recevoir la réponse du groupe.";
 
         if (_identity() is not { } identity)
             return NoCharacter;
 
         if (_candidate is not { } candidate)
-            return "l'admission n'est pas prête, réessayez dans un instant.";
+            return "L'entrée dans le groupe n'est pas encore prête. Réessayer dans un instant.";
 
         var request = candidate.Start(code, service, password, identity.PublicKey, self.Name, self.WorldId);
 
@@ -874,7 +874,7 @@ public sealed class PresenceService : IDisposable
         // La candidature reste en attente : le redépôt de chaque minute
         // réessaiera, et le service sera peut-être revenu d'ici là.
         if (delivered == 0)
-            return $"Demande pas encore envoyée ({failure}) : nouvel essai chaque minute.";
+            return $"Demande non envoyée ({failure}). Nouvel essai chaque minute.";
 
         // Rien de plus : à ce stade on ne connaît ni le mode d'admission ni qui
         // répondra, et une réponse arrive souvent dans la seconde.
@@ -898,7 +898,7 @@ public sealed class PresenceService : IDisposable
         IncomingRequest request, NearbyPlayer self, CancellationToken ct)
     {
         if (Connected is false)
-            return ("aucun service de rendez-vous joignable.", null);
+            return ("aucun service Linkpearl disponible.", null);
 
         if (_identity() is not { } identity)
             return (NoCharacter, null);
@@ -931,7 +931,7 @@ public sealed class PresenceService : IDisposable
         catch (Exception e)
         {
             _log.Warning(e, "Réponse d'acceptation en échec.");
-            return ($"réponse impossible : {e.Message}", agreed);
+            return ("Réponse impossible. Vérifier la connexion aux services Linkpearl, puis réessayer.", agreed);
         }
     }
 
@@ -1027,7 +1027,7 @@ public sealed class PresenceService : IDisposable
             return;
 
         var address = GroupDerivation.AdmissionAddress(ticket.ToBytes(), _clock.UtcNow).ToBytes();
-        Detach(() => DepositOnAsync([at], address, proof, CancellationToken.None), "Envoi de la preuve d'admission");
+        Detach(() => DepositOnAsync([at], address, proof, CancellationToken.None), "Envoi de la demande d'entrée");
     }
 
     /// <summary>Dépose les réponses de l'hôte, hors du fil d'écoute, dans la limite du plafond.</summary>
@@ -1041,7 +1041,7 @@ public sealed class PresenceService : IDisposable
                 continue;
             }
 
-            Detach(() => AnswerAsync(answer, CancellationToken.None), "Réponse d'admission");
+            Detach(() => AnswerAsync(answer, CancellationToken.None), "Réponse à la demande d'entrée");
         }
     }
 

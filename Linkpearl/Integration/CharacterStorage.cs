@@ -85,11 +85,11 @@ public static class CharacterStorage
             {
                 // Un fichier verrouillé n'empêche pas les autres de suivre :
                 // l'identité est le seul qui compte vraiment.
-                log($"reprise de {name} impossible : {e.Message}");
+                log($"récupération de {name} impossible : {e.Message}");
             }
         }
 
         if (moved > 0)
-            log($"identité et carnet repris de l'emplacement précédent ({moved} fichier(s)).");
+            log($"identité et carnet récupérés depuis l'ancien emplacement ({moved} fichier(s)).");
     }
 }

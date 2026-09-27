@@ -17,7 +17,7 @@ internal static class BanChip
         if (player is not { } print || bans.Status(print) is not { Verdict: BanVerdict.Listed, Ban: { } ban })
             return false;
 
-        Chip.Draw("banni par un service", Theme.Danger, Icons.Blocked);
+        Chip.Draw("bloqué par un service", Theme.Danger, Icons.Blocked);
 
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip($"{ban.Service} : {Glyphs.Safe(ban.Reason)}");

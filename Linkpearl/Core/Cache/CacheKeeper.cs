@@ -214,7 +214,7 @@ public sealed class CacheKeeper(
         // blobs/ et incoming/, même sur le chemin qui vient de bloquer (vidé
         // sans être supprimé).
         OpenConfigured(explicitChoice: true);
-        return _state is CacheGateState.Open ? null : "ce dossier n'a pas pu être ouvert.";
+        return _state is CacheGateState.Open ? null : "impossible d'ouvrir ce dossier.";
     }
 
     /// <summary>Le quota, en gigaoctets, borné et appliqué tout de suite.</summary>

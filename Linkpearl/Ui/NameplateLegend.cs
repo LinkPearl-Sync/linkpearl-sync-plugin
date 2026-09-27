@@ -11,10 +11,10 @@ internal static class NameplateLegend
     {
         Line(NameplateMark.Online, "pairé et connecté");
         Line(NameplateMark.Available, "utilise Linkpearl, pas encore pairé");
-        Line(NameplateMark.Requesting, "vous a envoyé une demande de pairage");
+        Line(NameplateMark.Requesting, "demande de pairage reçue");
         Line(NameplateMark.Offline, "pairé, hors ligne ou en pause");
-        Line(NameplateMark.Trouble, "pairé, mais quelque chose a échoué : voir la page Pairs");
-        Line(NameplateMark.GroupMember, "membre d'un de vos groupes");
+        Line(NameplateMark.Trouble, "pairé, erreur de synchronisation : consulter le carnet");
+        Line(NameplateMark.GroupMember, "membre d'un groupe commun");
     }
 
     private static void Line(NameplateMark mark, string meaning)

@@ -82,7 +82,7 @@ public class TransferBadgeTests
 
         var badge = TransferBadge.Of(Status(PeerSessionState.Connected, view));
 
-        Assert.Equal("application", badge?.Label);
+        Assert.Equal("application de l'apparence", badge?.Label);
     }
 
     [Fact]

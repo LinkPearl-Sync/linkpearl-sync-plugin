@@ -1001,7 +1001,7 @@ public sealed class SyncEngine : IAsyncDisposable
             runtime.Session?.MarkApplied();
             _book.Seen(id);
 
-            _log.Info($"{runtime.Pair.DisplayName} : apparence posée.");
+            _log.Info($"{runtime.Pair.DisplayName} : apparence appliquée.");
         }
         catch (OperationCanceledException)
         {

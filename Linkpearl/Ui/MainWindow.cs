@@ -88,7 +88,7 @@ public sealed class MainWindow : ThemedWindow
         [
             new ShellPage
             {
-                Id = "nearby", Icon = Icons.Nearby, Label = () => "Autour", Draw = nearby.Draw,
+                Id = "nearby", Icon = Icons.Nearby, Label = () => "À proximité", Draw = nearby.Draw,
             },
             new ShellPage
             {
@@ -173,12 +173,12 @@ public sealed class MainWindow : ThemedWindow
 
         Feedback.Alert(Theme.Danger, Icons.Warning,
             $"Le dossier {_cacheKeeper.LostRoot ?? _cacheKeeper.ConfiguredRoot} n'existe plus. "
-          + "La synchronisation est arrêtée, et les pairs affichés sont revenus à leur apparence par défaut.");
+          + "Synchronisation arrêtée. Les pairs affichés ont retrouvé leur apparence d'origine.");
 
         ImGui.Dummy(Theme.S(0f, Theme.GapL));
         Text.Wrapped(
-            "Linkpearl ne recrée jamais un dossier disparu : il a peut-être été vidé exprès, ou était sur "
-          + "un disque débranché. Choisissez où mettre le cache, et tout repart.");
+            "Linkpearl ne recrée pas un dossier disparu. Le dossier a pu être supprimé ou se trouver sur "
+          + "un disque débranché. Choisir un nouvel emplacement pour le cache.");
 
         ImGui.Dummy(Theme.S(0f, Theme.GapM));
 

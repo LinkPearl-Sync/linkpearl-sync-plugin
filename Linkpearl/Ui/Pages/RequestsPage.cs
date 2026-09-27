@@ -41,7 +41,7 @@ internal sealed class RequestsPage(
         var pending = admissions();
 
         Text.PageHeader("Demandes",
-            "Quelqu'un souhaite que vous vous voyiez mutuellement avec vos mods, ou entrer dans un de vos groupes.");
+            "Demandes de partage d'apparences ou d'entrée dans un groupe.");
 
         if (requests.Count == 0 && pending.Count == 0)
         {
@@ -63,11 +63,13 @@ internal sealed class RequestsPage(
             ImGui.Dummy(Theme.S(0f, Theme.GapXs));
 
             Chip.Draw(
-                visible ? "visible autour de vous" : "pas visible d'ici",
+                visible ? "visible à proximité" : "hors de vue",
                 visible ? Theme.Online : Theme.Idle,
                 visible ? Icons.Character : Icons.Warning);
 
-            ImGui.Dummy(Theme.S(0f, Theme.GapM));
+            ImGui.Dummy(Theme.S(0f, Theme.GapXs));
+            DrawRecognitionHint(visible);
+            ImGui.Dummy(Theme.S(0f, Theme.GapS));
 
             if (Btn.Draw("Accepter", BtnTone.Action, BtnSize.Small, Icons.Accept,
                          id: $"accept_{request.Id.ToHex()}"))
@@ -98,11 +100,13 @@ internal sealed class RequestsPage(
         ImGui.Dummy(Theme.S(0f, Theme.GapXs));
 
         Chip.Draw(
-            visible ? "visible autour de vous" : "pas visible d'ici",
+            visible ? "visible à proximité" : "hors de vue",
             visible ? Theme.Online : Theme.Idle,
             visible ? Icons.Character : Icons.Warning);
 
-        ImGui.Dummy(Theme.S(0f, Theme.GapM));
+        ImGui.Dummy(Theme.S(0f, Theme.GapXs));
+        DrawRecognitionHint(visible);
+        ImGui.Dummy(Theme.S(0f, Theme.GapS));
 
         if (Btn.Draw("Accepter", BtnTone.Action, BtnSize.Small, Icons.Accept, id: $"admission_accept_{id}"))
             approve(pending);
@@ -111,5 +115,14 @@ internal sealed class RequestsPage(
 
         if (Btn.Draw("Refuser", BtnTone.Ghost, BtnSize.Small, Icons.Decline, id: $"admission_decline_{id}"))
             declineAdmission(pending);
+    }
+
+    /// <summary>Le repère de confiance montré avant toute acceptation.</summary>
+    public static void DrawRecognitionHint(bool visible)
+    {
+        Text.Wrapped("N'accepter que si vous reconnaissez ce personnage.", Theme.TextMuted);
+
+        if (visible is false)
+            Text.Wrapped("Linkpearl ne peut pas confirmer qu'il se trouve actuellement à proximité.", Theme.Idle);
     }
 }

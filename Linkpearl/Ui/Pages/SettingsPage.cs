@@ -75,11 +75,11 @@ internal sealed class SettingsPage(
 
         var discoverable = configuration.Discoverable;
 
-        if (Toggle.Draw("Me signaler aux autres joueurs", ref discoverable, "discoverable",
-                        hint: "Permet aux autres joueurs de Linkpearl de vous voir et de vous envoyer une demande "
-                            + "de pairage. En contrepartie, les services de votre liste savent quand votre personnage "
-                            + "est en ligne. Désactivé, personne de nouveau ne peut vous trouver, et vous ne pouvez "
-                            + "pas rejoindre de groupe."))
+        if (Toggle.Draw("Être visible par les autres joueurs", ref discoverable, "discoverable",
+                        hint: "Permet aux autres joueurs Linkpearl de reconnaître ce personnage et d'envoyer une demande. "
+                            + "Chaque service actif sait alors que ce personnage est en ligne "
+                            + "et utilise son nom "
+                            + "pour le rendre visible."))
         {
             configuration.Discoverable = discoverable;
             configuration.Save();
@@ -87,13 +87,13 @@ internal sealed class SettingsPage(
 
         // Exception voulue à la règle « tout en infobulle » : ce qui se paie
         // en vie privée se lit avant de cocher, pas au survol d'une icône.
-        Text.Small("Le service sait alors que vous êtes en ligne.", Theme.TextFaint);
+        Text.Small("Le service sait alors que ce personnage est en ligne.", Theme.TextFaint);
 
         ImGui.Dummy(Theme.S(0f, Theme.GapS));
 
         var glyphs = configuration.ShowNameplateGlyphs;
 
-        if (Toggle.Draw("Glyphe à côté du nom", ref glyphs, "nameplate_glyphs", hintContent: NameplateLegend.Draw))
+        if (Toggle.Draw("Icône à côté du nom", ref glyphs, "nameplate_glyphs", hintContent: NameplateLegend.Draw))
         {
             configuration.ShowNameplateGlyphs = glyphs;
             configuration.Save();
@@ -104,9 +104,8 @@ internal sealed class SettingsPage(
         var badges = configuration.ShowTransferBadges;
 
         if (Toggle.Draw("Badges de transfert", ref badges, "transfer_badges",
-                        hint: "Affiche un petit badge sous un pair tant que son apparence n'est pas arrivée : "
-                            + "connexion, téléchargement avec sa progression, application. Il disparaît une fois "
-                            + "l'apparence posée."))
+                        hint: "Badge affiché aux pieds d'un pair visible pendant le chargement de son apparence : connexion, "
+                            + "attente, réception et application. Le badge disparaît une fois l'apparence affichée."))
         {
             configuration.ShowTransferBadges = badges;
             configuration.Save();
@@ -133,7 +132,7 @@ internal sealed class SettingsPage(
 
         if (Btn.Draw("Supprimer l'ancien cache", BtnTone.Danger, BtnSize.Small, Icons.Remove, id: "cache_delete_previous",
                      disabled: _deletingPrevious,
-                     tooltip: "N'efface que les fichiers de Linkpearl. Tout autre fichier de ce dossier reste."))
+                     tooltip: "Supprime uniquement les fichiers Linkpearl. Les autres fichiers du dossier sont conservés."))
         {
             // Le drapeau désactive le bouton tout de suite : sans lui, un
             // second clic pendant la suppression lancerait une deuxième
@@ -155,7 +154,7 @@ internal sealed class SettingsPage(
                     // garde que le type d'exception ; l'interface, elle, peut
                     // afficher le message complet.
                     Plugin.Log.Warning($"Suppression de l'ancien cache en échec ({e.GetType().Name}).");
-                    _deletePreviousError = $"échec de la suppression : {e.Message}";
+                    _deletePreviousError = "Suppression impossible. Vérifier que le dossier n'est pas utilisé, puis réessayer.";
                 }
                 finally
                 {
@@ -178,10 +177,10 @@ internal sealed class SettingsPage(
 
         var limited = configuration.LimitUpload;
 
-        if (Toggle.Draw("Brider l'envoi", ref limited, "limit_upload",
-                        hint: "Activé, vos envois ralentissent dès que votre ping monte : le jeu reste fluide, utile "
-                            + "en donjon, mais vos amis reçoivent votre tenue en plusieurs minutes. Désactivé, ils la "
-                            + "reçoivent en quelques secondes, avec un ping plus élevé pendant l'envoi."))
+        if (Toggle.Draw("Limiter la vitesse d'envoi", ref limited, "limit_upload",
+                        hint: "Avec la limite, l'envoi ralentit si la connexion du jeu se dégrade. Une tenue peut mettre "
+                            + "plusieurs minutes à arriver, mais le jeu reste fluide. Sans limite, elle arrive en quelques "
+                            + "secondes et peut augmenter le temps de réponse du jeu pendant le transfert."))
             setUploadLimited(limited);
 
         ImGui.Dummy(Theme.S(0f, Theme.GapM));
@@ -189,11 +188,11 @@ internal sealed class SettingsPage(
         // Aligné comme dans DrawService : sans ça, le texte flotte au-dessus
         // de l'icône ⓘ qui suit, calée sur la hauteur d'un cadre.
         ImGui.AlignTextToFramePadding();
-        Text.Body("Services de rendez-vous");
+        Text.Body("Services Linkpearl");
         Feedback.Hint(
-            "Des serveurs qui mettent les joueurs en relation, et font passer les données quand deux "
-          + "joueurs ne peuvent pas se connecter directement. Ils ne voient ni vos fichiers ni vos "
-          + "apparences. Vous ne voyez que les joueurs qui ont au moins un service en commun avec vous.");
+            "Ces services permettent aux joueurs de se trouver et transmettent les données si la connexion directe échoue. "
+          + "Les fichiers et les apparences restent illisibles pour les services. Seuls les "
+          + "joueurs utilisant au moins un service commun peuvent se voir.");
 
         ImGui.Dummy(Theme.S(0f, Theme.GapS));
 
@@ -201,7 +200,7 @@ internal sealed class SettingsPage(
             DrawService(i);
 
         if (configuration.Rendezvous.Count == 0)
-            Text.Small("Aucun service. Personne ne peut vous voir, et vous ne voyez personne.", Theme.Danger);
+            Text.Small("Aucun service. Aucun joueur visible et aucune demande possible.", Theme.Danger);
 
         ImGui.Dummy(Theme.S(0f, Theme.GapM));
 
@@ -213,27 +212,35 @@ internal sealed class SettingsPage(
             Add(_newAddress);
 
         Feedback.Hint(
-            "Chaque service de la liste sait quand votre personnage est en ligne et quels joueurs de "
-          + "Linkpearl sont autour de vous. Plus de services, c'est plus de joueurs visibles, mais "
-          + "aussi plus d'opérateurs au courant.");
+            "Plus il y a de services, plus il y a de joueurs trouvés. En contrepartie, chaque service "
+          + "sait quand ce personnage est connecté et quels joueurs sont à côté.");
 
         ImGui.Dummy(Theme.S(0f, Theme.GapS));
 
         var open = configuration.OpenCircle;
 
         if (Toggle.Draw("Réseau ouvert", ref open, "open_circle",
-                        hint: "Une fois pairé avec quelqu'un, vous vous retrouvez aussi par des serveurs de "
-                            + "bénévoles, admis après trois jours de bon fonctionnement. Ils ne voient ni votre "
-                            + "nom ni vos fichiers, et les demandes de pairage passent toujours par votre liste."))
+                        hint: "Utilise aussi d'autres services Linkpearl pour retrouver les pairs déjà "
+                            + "ajoutés. Un service n'y entre qu'après trois jours sans problème. "
+                            + "Un nouveau pairage passe toujours par les services ci-dessus."))
         {
             configuration.OpenCircle = open;
             configuration.Save();
             openCircle.Enabled = open;
         }
 
-        Text.Small(openCircle.Current is { } list
-            ? $"{list.Entries.Count} service(s) ouvert(s), liste valable jusqu'au {DateTimeOffset.FromUnixTimeSeconds(list.Expires).ToLocalTime():d MMMM HH:mm}."
-            : "Aucune liste valable : tout passe par les services ci-dessus.", Theme.TextFaint);
+        if (openCircle.Current is { } list)
+        {
+            var count = list.Entries.Count;
+            var services = count == 1 ? "1 service" : $"{count} services";
+
+            Text.Small($"{services} dans le réseau ouvert, liste valable jusqu'au "
+                     + $"{DateTimeOffset.FromUnixTimeSeconds(list.Expires).ToLocalTime():d MMMM HH:mm}.", Theme.TextFaint);
+        }
+        else
+        {
+            Text.Small("Réseau ouvert indisponible. Seuls les services ci-dessus sont utilisés.", Theme.TextFaint);
+        }
     }
 
     /// <summary>Identité : sauvegarde du personnage et de son carnet, et la présentation.</summary>
@@ -287,7 +294,7 @@ internal sealed class SettingsPage(
         ImGui.SameLine(0f, Theme.S(Theme.GapS));
         ImGui.SetCursorPosX(ImGui.GetCursorPosX() + ImGui.GetContentRegionAvail().X - buttons);
 
-        if (Btn.Icon(Icons.Refresh, "discover", tooltip: "Voir les autres services que celui-ci connaît"))
+        if (Btn.Icon(Icons.Refresh, "discover", tooltip: "Voir les services connus par celui-ci"))
             discover(entry.Address);
 
         ImGui.SameLine(0f, Theme.S(Theme.GapS));
@@ -313,7 +320,7 @@ internal sealed class SettingsPage(
 
         if (discovery.Running)
         {
-            Text.Muted("Interrogation en cours...");
+            Text.Muted("Recherche en cours...");
             return;
         }
 
@@ -325,7 +332,7 @@ internal sealed class SettingsPage(
 
         if (discovery.Offered.Count == 0)
         {
-            Text.Small("Ce service ne connaît personne, ou n'en publie aucun.", Theme.TextFaint);
+            Text.Small("Aucun service publié par ce service.", Theme.TextFaint);
         }
 
         foreach (var offered in discovery.Offered)
@@ -353,13 +360,13 @@ internal sealed class SettingsPage(
             if (known)
             {
                 ImGui.SameLine(0f, Theme.S(Theme.GapS));
-                Text.Small("déjà dans votre liste", Theme.TextFaint);
+                Text.Small("déjà dans la liste", Theme.TextFaint);
             }
         }
 
         ImGui.Dummy(Theme.S(0f, Theme.GapM));
 
-        if (Btn.Draw($"Ajouter les {discovery.Chosen.Count} cochés", BtnTone.Action, BtnSize.Small,
+        if (Btn.Draw($"Ajouter les {discovery.Chosen.Count} services cochés", BtnTone.Action, BtnSize.Small,
                      Icons.Accept, disabled: discovery.Chosen.Count == 0, id: "add_chosen"))
         {
             foreach (var address in discovery.Chosen)

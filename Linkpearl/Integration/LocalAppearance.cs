@@ -84,7 +84,7 @@ public sealed class LocalAppearance : ILocalAppearance, IDisposable
     public PlayerFingerprint? Fingerprint => _fingerprint;
 
     /// <summary>Ce que la dernière construction a produit, pour l'interface.</summary>
-    public string Description { get; private set; } = "rien de capturé pour l'instant";
+    public string Description { get; private set; } = "aucune apparence enregistrée";
 
     public bool Building { get; private set; }
 
@@ -105,7 +105,7 @@ public sealed class LocalAppearance : ILocalAppearance, IDisposable
 
         _fingerprint = fingerprint;
         _current = null;
-        Description = fingerprint is null ? "hors du jeu" : "apparence à construire";
+        Description = fingerprint is null ? "hors du jeu" : "apparence en préparation";
 
         if (fingerprint is not null)
             Rebuild();
@@ -165,7 +165,7 @@ public sealed class LocalAppearance : ILocalAppearance, IDisposable
             }
             catch (Exception e)
             {
-                Description = $"construction en échec : {e.Message}";
+                Description = $"préparation impossible : {e.Message}";
                 _log.Warning(e, "Construction de l'apparence locale en échec.");
             }
             finally
@@ -193,7 +193,7 @@ public sealed class LocalAppearance : ILocalAppearance, IDisposable
 
         if (snapshot is null)
         {
-            Description = "personnage encore en chargement, l'apparence précédente est conservée";
+            Description = "personnage en cours de chargement. Apparence précédente conservée";
             _log.Warning(Description);
             return;
         }
@@ -202,7 +202,7 @@ public sealed class LocalAppearance : ILocalAppearance, IDisposable
 
         if (resources is null)
         {
-            Description = "Penumbra n'a rendu aucune ressource";
+            Description = "aucun fichier reçu de Penumbra";
             return;
         }
 
@@ -277,7 +277,7 @@ public sealed class LocalAppearance : ILocalAppearance, IDisposable
         // l'utilisateur le découvrir en se voyant nu chez les autres.
         if (manifest.Replacements.Count == 0 && _current is { Replacements.Count: > 0 })
         {
-            Description = "aucune ressource moddée trouvée, l'apparence précédente est conservée";
+            Description = "aucun fichier moddé trouvé. Apparence précédente conservée";
             _log.Warning(Description);
             return;
         }
@@ -288,7 +288,7 @@ public sealed class LocalAppearance : ILocalAppearance, IDisposable
         // le manifeste : une tempête pour une apparence identique.
         if (_current is { } previous && ManifestCodec.HashOf(previous) == ManifestCodec.HashOf(manifest))
         {
-            Description = $"inchangée, {hashed} fichier(s) rehaché(s)";
+            Description = $"inchangée, {hashed} fichier(s) vérifié(s) à nouveau";
             return;
         }
 
@@ -296,16 +296,16 @@ public sealed class LocalAppearance : ILocalAppearance, IDisposable
         // personnage quitté) : ce résultat ne concerne plus rien de suivi.
         if (Interlocked.Read(ref _generation) != generation)
         {
-            Description = "construction abandonnée, le suivi a changé entre-temps";
+            Description = "préparation annulée : le personnage suivi a changé";
             return;
         }
 
         _current = manifest;
 
         Description = $"{manifest.Replacements.Count} fichiers, "
-                    + $"{manifest.Replacements.Sum(r => r.GamePaths.Count)} chemins de jeu, "
+                    + $"{manifest.Replacements.Sum(r => r.GamePaths.Count)} éléments du jeu, "
                     + $"{manifest.SwapsOrNone.Count} échange(s), "
-                    + $"{known.Values.Sum(e => e.Size) / 1024 / 1024} Mo, {hashed} haché(s)"
+                    + $"{known.Values.Sum(e => e.Size) / 1024 / 1024} Mo, {hashed} fichier(s) vérifié(s)"
                     + $"{(build.Skipped.Count > 0 ? $", {build.Skipped.Count} écartés" : "")}";
 
         _log.Information($"Apparence locale construite : {Description}");

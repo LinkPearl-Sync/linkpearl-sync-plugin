@@ -29,7 +29,7 @@ public sealed class PairingService : IDisposable
 
     /// <summary>Ce qu'on répond tant qu'aucun personnage n'est connecté.</summary>
     private const string NoCharacter =
-        "connectez-vous d'abord : l'identité Linkpearl appartient au personnage, pas à l'installation.";
+        "connexion à un personnage requise : chaque personnage possède sa propre identité Linkpearl.";
 
     /// <summary>Vrai quand une identité de personnage est chargée.</summary>
     public bool IsBound => _identity is not null;
@@ -86,7 +86,7 @@ public sealed class PairingService : IDisposable
     /// relier à la case qu'il vient de décocher.
     /// </remarks>
     private const string NoService =
-        "aucun service de rendez-vous actif : ajoutez-en un dans les réglages.";
+        "aucun service Linkpearl actif. En ajouter un dans les réglages.";
 
     public PeerId? Id => _identity?.Id;
 
@@ -108,7 +108,7 @@ public sealed class PairingService : IDisposable
         // sa place au carnet, et l'y mettre avec l'aléa seul referait l'erreur
         // de la version 1, un secret que le rendez-vous connaît.
         if (request.PairingMaterial is not { } material)
-            return "pairage incomplet : aucun accord de clé avec ce joueur.";
+            return "pairage incomplet avec ce joueur.";
 
         var again = _book.Find(request.Id) is { Trust: not PairTrust.Revoked };
 
@@ -125,8 +125,8 @@ public sealed class PairingService : IDisposable
         _bookStore.Save(_book);
 
         return again
-            ? $"{request.CharacterName} appairé à nouveau."
-            : $"{request.CharacterName} ajouté à vos pairs.";
+            ? $"Nouveau pairage avec {request.CharacterName}."
+            : $"{request.CharacterName} ajouté au carnet.";
     }
 
     /// <summary>Enregistre un carnet que le moteur vient de modifier.</summary>
@@ -149,7 +149,7 @@ public sealed class PairingService : IDisposable
 
         _book.SetPaused(id, paused);
         _bookStore.Save(_book);
-        return paused ? $"{record.DisplayName} en pause." : $"{record.DisplayName} repris.";
+        return paused ? $"{record.DisplayName} est en pause." : $"{record.DisplayName} repris.";
     }
 
     /// <summary>Change les animations, VFX et sons acceptés de ce pair.</summary>

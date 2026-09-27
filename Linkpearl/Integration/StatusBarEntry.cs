@@ -59,8 +59,8 @@ internal sealed class StatusBarEntry : IDisposable
         if (cacheMissing)
         {
             _entry.Text = $"{Glyph} cache introuvable";
-            _entry.Tooltip = "Linkpearl : le dossier du cache a disparu, la synchronisation est arrêtée.\n"
-                           + "Cliquez pour en choisir un autre.";
+            _entry.Tooltip = "Linkpearl : dossier du cache introuvable. Synchronisation arrêtée.\n"
+                           + "Choisir un autre dossier.";
             return;
         }
 

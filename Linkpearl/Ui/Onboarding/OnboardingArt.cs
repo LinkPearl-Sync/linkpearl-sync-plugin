@@ -36,7 +36,7 @@ internal static class OnboardingArt
         dl.AddCircleFilled(server, Theme.S(16f), C(Theme.BgBase));
         dl.AddCircle(server, Theme.S(16f), C(Theme.TextFaint), 24, 1.5f);
         CenteredText(dl, server, Icons.Rendezvous.S(), Theme.TextFaint);
-        CenteredText(dl, server + new Vector2(0f, Theme.S(26f)), "rendez-vous", Theme.TextFaint);
+        CenteredText(dl, server + new Vector2(0f, Theme.S(26f)), "service", Theme.TextFaint);
 
         // Le lien direct, chiffré.
         dl.AddLine(left, right, C(Theme.Accent), Theme.S(3f));
@@ -44,10 +44,10 @@ internal static class OnboardingArt
         dl.AddCircleFilled(middle, Theme.S(14f), C(Theme.BgSurface));
         dl.AddCircle(middle, Theme.S(14f), C(Theme.Accent), 24, 2f);
         CenteredText(dl, middle, Icons.Lock.S(), Theme.Accent);
-        CenteredText(dl, middle + new Vector2(0f, Theme.S(26f)), "chiffré, de joueur à joueur", Theme.Accent);
+        CenteredText(dl, middle + new Vector2(0f, Theme.S(26f)), "protégé, de joueur à joueur", Theme.Accent);
 
-        Person(dl, left, Theme.Online, "vous");
-        Person(dl, right, Theme.Accent, "votre ami");
+        Person(dl, left, Theme.Online, "joueur");
+        Person(dl, right, Theme.Accent, "ami");
 
         ImGui.Dummy(new Vector2(width, height));
     }
@@ -67,14 +67,14 @@ internal static class OnboardingArt
         var side = (width - gap * 2f) * 0.28f;
         var menu = (width - gap * 2f) * 0.44f;
 
-        // 1. La plaque de nom, glyphe orange à droite.
+        // 1. La plaque de nom, icône orange à droite.
         var plateMin = origin + new Vector2(0f, Theme.S(34f));
         var plateMax = plateMin + new Vector2(side, Theme.S(30f));
         dl.AddRectFilled(plateMin, plateMax, C(Theme.Alpha(Theme.Shadow, 0.55f)), Theme.S(6f));
         dl.AddText(plateMin + Theme.S(10f, 7f), C(Theme.Text), Glyphs.Safe("Alys Fenwood"));
         dl.AddCircleFilled(new Vector2(plateMax.X - Theme.S(12f), (plateMin.Y + plateMax.Y) * 0.5f),
                            Theme.S(5f), C(NameplateGlyphs.ColorOf(NameplateMark.Available)));
-        Caption(dl, new Vector2(plateMin.X, plateMax.Y + Theme.S(8f)), "1. un glyphe orange");
+        Caption(dl, new Vector2(plateMin.X, plateMax.Y + Theme.S(8f)), "1. une icône orange");
 
         // 2. Le menu clic droit.
         var menuMin = origin + new Vector2(side + gap, 0f);
@@ -96,7 +96,7 @@ internal static class OnboardingArt
         dl.AddText(toastMin + Theme.S(10f, 8f), C(Theme.Text), Glyphs.Safe("Demande de pairage"));
         dl.AddText(toastMin + Theme.S(10f, 30f), C(Theme.Online), Icons.Accept.S());
         dl.AddText(toastMin + Theme.S(32f, 30f), C(Theme.Danger), Icons.Decline.S());
-        Caption(dl, new Vector2(toastMin.X, toastMax.Y + Theme.S(8f)), "3. l'autre accepte");
+        Caption(dl, new Vector2(toastMin.X, toastMax.Y + Theme.S(8f)), "3. acceptation par l'autre joueur");
 
         ImGui.Dummy(new Vector2(width, height));
     }

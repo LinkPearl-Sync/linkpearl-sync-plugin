@@ -55,18 +55,21 @@ You pair with a friend, in game, in two clicks. From then on, each of you sees t
 
 ### First launch
 
-A short introduction opens and asks you to choose **where to keep the cache** (the looks you receive, kept on your disk so they don't have to be downloaded again) and **its maximum size**. You can change both at any time in the settings.
+A short introduction opens and asks you to choose **where to keep the cache** (local storage that avoids downloading received looks again) and its **Taille maximale du cache** (maximum cache size). You can change both at any time in the settings.
 
 The plugin window opens with `/lpearl`, or by clicking the Linkpearl entry in the game's server info bar.
+At the bottom of the window, **Service disponible** (service available) or **Service indisponible** (service unavailable) tells you whether the rendezvous service is responding. An existing session can continue even if the service becomes unavailable.
 
 ### Pairing
 
 <p align="center">
-  <img src="docs/images/se-pairer.svg" alt="An orange glyph next to the name, the right-click entry « Linkpearl : demander le pairage », then the other player accepting the request" width="608">
+  <img src="docs/images/se-pairer.svg" alt="An orange icon next to the name, the right-click entry « Linkpearl : demander le pairage », then the other player accepting the request" width="608">
 </p>
 
-1. Get close to your friend. An **orange glyph** next to their name means they use Linkpearl.
-2. **Right-click** their character, then **Linkpearl : demander le pairage** (request pairing). You can also use the **Autour** (nearby) page of the window.
+A **pair** is a player added to your Linkpearl contacts.
+
+1. Get close to your friend. An **orange icon** next to their name means they use Linkpearl.
+2. **Right-click** their character, then **Linkpearl : demander le pairage** (request pairing). You can also use the **À proximité** (nearby) page of the window.
 3. Your friend gets a notification and **accepts** with one click.
 
 That's it: your looks are exchanged whenever you are within range of each other.
@@ -95,8 +98,7 @@ That's it: your looks are exchanged whenever you are within range of each other.
 - **Pause a peer**: **Pairs** page, pause button. The connection closes and their look is removed.
 - **Block animations, effects or sounds**: for everyone from the window's title bar, or for a single peer from the **Pairs** page. Nothing you block is downloaded.
 - **The cache**: folder and size in **Réglages > Cache** (Settings > Cache). Past the size you chose, the oldest looks go first, never the ones currently in front of you.
-- **Rendezvous services**: **Réglages > Réseau** (Settings > Network). The list comes with the project's service; **Ajouter** (add) takes another address, and the refresh button next to a service shows the services it knows, added only once you tick them. **Brider l'envoi** (throttle uploads), off by default, keeps your ping low in dungeons at the cost of much slower outfits.
-- **Back up your identity**: **Réglages > Sauvegarde** (Settings > Backup), at the top of the page. A single file, password-protected if you like. After a reinstall or on another PC, restoring it saves you from pairing with everyone again.
+- **Back up your characters and pairings**: **Réglages > Sauvegarde** (Settings > Backup), at the top of the page. A single file, password-protected if you like, lets you resume the same Linkpearl identity after a reinstall or on another PC.
 
 ---
 
@@ -106,35 +108,28 @@ A group syncs all its members with each other, without pairing them one by one: 
 
 - **Create**: **Créer un groupe** (create a group), give it a name (letters, digits and dashes, no spaces), optionally a password, then **Créer** (create). With a password, any member online lets in whoever knows it. Without one, you or a moderator approve each newcomer.
 - **Share the code**: under **Inviter** (invite), the code (`ABCD-EFGH-JKLM@service`) and its **Copier le code** (copy the code) button. Send it by /tell. The page shows it to the owner and the moderators only.
-- **Join**: **Rejoindre un groupe** (join a group), paste the code, the password if the group has one, then **Rejoindre** (join). A member must be online to answer, or a moderator if the group approves each newcomer. Joining needs **Me signaler aux autres joueurs** (let other players see me) turned on: that is how the group answers you.
+- **Join**: **Rejoindre un groupe** (join a group), paste the code, the password if the group has one, then **Rejoindre** (join). A member must be online to answer, or a moderator if the group approves each newcomer. Joining needs **Être visible par les autres joueurs** (be visible to other players) turned on: that is how the group answers you.
 - **Approve**: requests to join show up on the **Demandes** (Requests) page for the owner and the moderators, with **Accepter** (accept) and **Refuser** (decline).
 - **Moderate**: on a member's row, **Exclure** (exclude) takes two clicks, and the owner can **Nommer modérateur** (make moderator). Under **Gérer le groupe** (manage the group): an **Admission** panel with **Mot de passe** (password) or **Validation par un modérateur** (approval by a moderator), a **Mot de passe** (password) panel with **Définir** (set) or **Changer** (change) once one is set, the **Exclus** (excluded) list with **Lever** (lift) or **Personne n'est exclu** (no one is excluded) when it's empty, and a **Zone sensible** (danger zone) with **Nouveau code** (new code) and **Dissoudre le groupe** (dissolve the group).
 - **Leave or dissolve**: **Quitter le groupe** (leave the group). The owner doesn't leave: they dissolve the group with **Dissoudre le groupe** (dissolve the group), under **Gérer le groupe**. Members find out when they next meet the owner, so keep the group in your list until they have, then **Retirer de la liste** (remove from the list).
 
 The code is a door, not a key: on its own, it lets no one in. After excluding someone who knew the password, change the code and the password.
 
-### Public
+### Mode public
 
-At the top of the **Groupes** (Groups) page, the **Public** card, off by default. Click **Activer** (enable), then the first time confirm with **Activer Public** (enable Public): you see the modded appearance of every visible player who enabled it too, and they see yours, with no code and no pairing. They are strangers: their animations, VFX and sounds are off by default. Under **Effets reçus** (effects received), the **Animations**, **VFX** and **Sons** (sounds) buttons turn them back on for all of Public; under **Joueurs rencontrés** (players met), a player's effects button sets them for that player alone, and **Suivre le Public** (follow Public) brings them back to the shared setting. The block button, in two clicks, means they no longer see you and you no longer see them; the **Bloqués** (blocked) list lets you **Débloquer** (unblock). **Désactiver** (disable) keeps your blocks for next time.
+At the top of the **Groupes** (Groups) page, **Mode public** (public mode) is off by default. The first activation is confirmed with **Activer le mode public** (enable public mode). You then see the modded appearance of every visible player who enabled it, and they see yours, with no code and no pairing, even if you do not know one another. These strangers' animations, visual effects (VFX), and sounds are off by default. The **Animations**, **VFX**, and **Sons** (sounds) buttons turn them back on for everyone in public mode; under **Joueurs rencontrés** (players met), a player's effects button sets them for that player alone, and **Suivre le mode public** (follow public mode) restores the shared setting. **Bloquer** (block), in two clicks, stops all appearance sharing with that player; the **Bloqués** (blocked) list lets you **Débloquer** (unblock). Disabling public mode keeps your blocks for next time.
 
 ### Services' ban lists
 
-Each rendezvous service in your list can publish a list of banned characters. A character listed by one of your services is not paired, not admitted into your groups, not seen through Public, and their appearance is not applied on your side, even if they are one of your pairs. Their row carries the **banni par un service** (banned by a service) chip, with the reason on hover. Such a list is a matter of reputation, not proof: turning a service off or removing it from your settings lifts its bans. Open-network services cannot ban anyone.
-
----
-
-## The open network
-
-Once paired, you and your pair also meet through two services run by volunteers, picked from a list signed by the project's authority (rdv.linkpearl.eorzea.events). A service enters it on its own, after 72 hours of answering at least 95% of checks, and never sees a key or a character name: pairing itself, Public and group members you have not met yet stay on the services in your list. If neither of your two services answers within 10 seconds, or no valid list is held, everything goes back to your list. The list is fetched again every hour, and right away when you turn the switch back on. The **Réseau ouvert** (open network) switch, under **Réglages > Réseau** (Settings > Network), is on by default. [Who is in it](https://linkpearl-sync.github.io/reseau.html).
+Each rendezvous service can publish a list of banned characters. A character listed by one of your services is not paired, not admitted into your groups, not seen through public mode, and their appearance is not applied on your side, even if they are one of your pairs. Their row carries the **bloqué par un service** (blocked by a service) chip, with the reason on hover. Such a list is a matter of reputation, not proof: removing a service from your settings lifts its bans.
 
 ---
 
 ## Privacy
 
-- Your files leave your game only for your pairs, the members of your groups and, if you enabled Public, the visible players who enabled it too. Always end-to-end encrypted.
-- For two players to find each other, Linkpearl goes through **rendezvous services**. They never see your files or your looks. The services in your list do see pairing requests go by, with the characters' names and public keys, and the IP addresses of those who use them.
-- Open-network services see your IP address, when you and a pair announce yourselves, and the volume of a relayed session, but no name, key or file.
-- If you keep **Me signaler aux autres joueurs** (let other players see me, on by default), the service can know that your character is online: that is what lets others recognise you. You can turn it off in **Réglages > Visibilité** (Settings > Visibility).
+- Your files leave your game only for the peers you accepted, end-to-end encrypted.
+- For two players to find each other, Linkpearl goes through a **rendezvous service**. It never sees your files or your looks. It does see pairing requests go by, with the characters' names and public keys, and the IP addresses of those who use it.
+- If you keep **Être visible par les autres joueurs** (let other players see me, on by default), the service can know that your character is online: that is what lets others recognise you. You can turn it off in **Réglages > Visibilité** (Settings > Visibility).
 - Joining a group also goes through the rendezvous service, which sees the code and the character's name and world. As with pairing, trust is established on first contact: for a group with a password, a long password is what really protects it.
 - You can host your own rendezvous service in one command: see [Host a rendezvous](https://linkpearl-sync.github.io/heberger.html) (Linux with systemd; the server then updates itself), or the [step-by-step guide](https://linkpearl-sync.github.io/expert.html#self-host). You and your friends just need to share at least one. By default a new service also applies to the open network, and joins it after 72 hours of reliable answers (`--no-announce` to stay out).
 

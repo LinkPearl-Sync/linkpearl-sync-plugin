@@ -430,7 +430,7 @@ public sealed class Plugin : IDalamudPlugin
 
         Commands.AddHandler(Command, new CommandInfo((_, _) => Open())
         {
-            HelpMessage = "Ouvre la fenêtre de Linkpearl.",
+            HelpMessage = "Ouvrir la fenêtre de Linkpearl.",
         });
 
         Log.Information($"Chargé. Penumbra : {Describe(penumbra.TryGetVersion())}, Glamourer : {Describe(glamourer.TryGetVersion())}.");
@@ -644,7 +644,7 @@ public sealed class Plugin : IDalamudPlugin
         {
             // Une exception ici remonterait dans la boucle du jeu.
             Log.Error(e, "Changement de personnage en échec.");
-            Report("l'identité de ce personnage n'a pas pu être chargée, voir le journal.");
+            Report("Impossible de charger l'identité de ce personnage. Consulter le journal.");
         }
     }
 
@@ -793,7 +793,7 @@ public sealed class Plugin : IDalamudPlugin
             Notifications.AddNotification(new Notification
             {
                 Title = "Linkpearl",
-                Content = "Le dossier du cache est introuvable. La synchronisation est arrêtée "
+                Content = "Le dossier du cache est introuvable. Synchronisation arrêtée "
                         + "jusqu'au choix d'un autre dossier.",
                 Type = NotificationType.Error,
             });
@@ -993,11 +993,12 @@ public sealed class Plugin : IDalamudPlugin
             _discovery.Offered = offered ?? [];
 
             if (offered is null)
-                _discovery.Failure = "ce service ne publie pas d'annuaire.";
+                _discovery.Failure = "ce service ne partage aucune liste de services.";
         }
         catch (Exception e)
         {
-            _discovery.Failure = $"interrogation impossible : {e.Message}";
+            Log.Warning($"Consultation de l'annuaire en échec ({e.GetType().Name}).");
+            _discovery.Failure = "Impossible de consulter ce service. Vérifier son adresse et réessayer.";
         }
         finally
         {
@@ -1045,8 +1046,8 @@ public sealed class Plugin : IDalamudPlugin
         _configuration.BackupReminded = true;
         _configuration.Save();
 
-        Report("pensez à sauvegarder vos personnages (Réglages, « Sauvegarde ») : "
-             + "sans elle, une réinstallation de Windows oblige à refaire chaque pairage.");
+        Report("Sauvegarder les personnages dans Réglages, « Sauvegarde » : "
+             + "sans sauvegarde, une réinstallation de Windows oblige à refaire tous les pairages.");
     }
 
     private string CharactersRoot => Path.Combine(_root, "characters");
@@ -1136,7 +1137,7 @@ public sealed class Plugin : IDalamudPlugin
 
             if (entries.Count == 0)
             {
-                Tell("aucun personnage à sauvegarder : connectez-vous d'abord avec chacun.", failed: true);
+                Tell("Aucun personnage à sauvegarder : se connecter d'abord avec chaque personnage.", failed: true);
                 return;
             }
 
@@ -1149,7 +1150,12 @@ public sealed class Plugin : IDalamudPlugin
             _configuration.Save();
 
             var saved = entries.Count == 1 ? "1 personnage sauvegardé" : $"{entries.Count} personnages sauvegardés";
-            var skipped = unreadable > 0 ? $", {unreadable} illisible(s) laissé(s) de côté" : "";
+            var skipped = unreadable switch
+            {
+                0 => "",
+                1 => ", 1 personnage illisible laissé de côté",
+                _ => $", {unreadable} personnages illisibles laissés de côté",
+            };
 
             // Le nom du fichier seulement : un chemin complet porte le nom du
             // compte Windows.
@@ -1157,7 +1163,8 @@ public sealed class Plugin : IDalamudPlugin
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            Tell($"écriture impossible : {e.Message}", failed: true);
+            Log.Warning($"Écriture de la sauvegarde en échec ({e.GetType().Name}).");
+            Tell("Sauvegarde impossible. Vérifier l'emplacement et les droits d'écriture.", failed: true);
         }
         finally
         {
@@ -1175,7 +1182,7 @@ public sealed class Plugin : IDalamudPlugin
 
             if (file.Exists is false || file.Length > 16 * 1024 * 1024)
             {
-                Tell("ce fichier n'est pas une sauvegarde Linkpearl.", failed: true);
+                Tell("Ce fichier n'est pas une sauvegarde Linkpearl.", failed: true);
                 return;
             }
 
@@ -1231,7 +1238,8 @@ public sealed class Plugin : IDalamudPlugin
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            Tell($"lecture impossible : {e.Message}", failed: true);
+            Log.Warning($"Lecture de la sauvegarde en échec ({e.GetType().Name}).");
+            Tell("Lecture impossible. Vérifier que le fichier existe et reste accessible.", failed: true);
         }
         finally
         {
@@ -1316,7 +1324,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         if (_state.Self is not { } self)
         {
-            Report("personnage introuvable.");
+            Report("Personnage introuvable.");
             return;
         }
 
@@ -1335,7 +1343,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         if (_state.Self is not { } self)
         {
-            Report("personnage introuvable.");
+            Report("Personnage introuvable.");
             return;
         }
 
@@ -1385,13 +1393,13 @@ public sealed class Plugin : IDalamudPlugin
     {
         if (_pairing.Identity is not { } identity)
         {
-            Report("personnage introuvable.");
+            Report("Personnage introuvable.");
             return false;
         }
 
         if (_configuration.ActiveRendezvous.FirstOrDefault() is not { } service)
         {
-            Report("activez d'abord un service de rendez-vous dans les réglages.");
+            Report("Activer d'abord un service Linkpearl dans les réglages.");
             return false;
         }
 
@@ -1401,17 +1409,15 @@ public sealed class Plugin : IDalamudPlugin
         {
             created = GroupGovernance.Create(name, password, service.Address, identity.PublicKey, _clock.UtcNow);
         }
-        catch (ArgumentException e)
+        catch (ArgumentException)
         {
-            // Sans le « (Parameter 'name') » que .NET accole au message, qui ne
-            // veut rien dire pour le joueur.
-            var why = e.ParamName is { } parameter ? e.Message.Replace($" (Parameter '{parameter}')", "") : e.Message;
-            Report($"création impossible : {why}.");
+            Report("Création impossible : le nom doit contenir de 1 à 32 lettres, chiffres ou tirets, sans espace.");
             return false;
         }
         catch (InvalidOperationException e)
         {
-            Report($"création impossible : {e.Message}.");
+            Log.Warning($"Création de groupe en échec ({e.GetType().Name}).");
+            Report("Création impossible. Réessayer. Si le problème persiste, consulter le journal.");
             return false;
         }
 
@@ -1442,13 +1448,13 @@ public sealed class Plugin : IDalamudPlugin
 
         if ((at ?? _configuration.ActiveRendezvous.FirstOrDefault()?.Address) is not { } service)
         {
-            Report("activez d'abord un service de rendez-vous dans les réglages.");
+            Report("Activer d'abord un service Linkpearl dans les réglages.");
             return;
         }
 
         if (_state.Self is not { } self)
         {
-            Report("personnage introuvable.");
+            Report("Personnage introuvable.");
             return;
         }
 
@@ -1469,7 +1475,7 @@ public sealed class Plugin : IDalamudPlugin
                 // Le type seul : le texte du code, donc de quoi entrer dans le
                 // groupe, n'a rien à faire au journal.
                 Log.Warning($"Demande d'admission en échec ({e.GetType().Name}).");
-                Report($"demande impossible : {e.Message}");
+                Report("Demande impossible. Vérifier la connexion aux services Linkpearl, puis réessayer.");
             }
         }, _shutdown.Token);
     }
@@ -1498,7 +1504,8 @@ public sealed class Plugin : IDalamudPlugin
         }
         catch (InvalidOperationException e)
         {
-            Report($"Refusé : {e.Message}");
+            Log.Warning($"Dissolution de groupe en échec ({e.GetType().Name}).");
+            Report("Dissolution impossible. Rouvrir la gestion du groupe et réessayer.");
         }
     }
 
@@ -1512,7 +1519,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         if (_groups.Find(id) is { SigningKey: not null, Policy.Dissolved: false } group)
         {
-            Report($"Le groupe {group.Name} vous appartient : dissolvez-le avant de l'oublier.");
+            Report($"Le groupe {group.Name} appartient à ce personnage. Le dissoudre avant de le retirer.");
             return;
         }
 
@@ -1539,7 +1546,7 @@ public sealed class Plugin : IDalamudPlugin
                 break;
 
             default:
-                Report("Seuls le propriétaire et les modérateurs peuvent faire cela.");
+                Report("Action réservée au propriétaire et aux modérateurs.");
                 return;
         }
 
@@ -1549,7 +1556,8 @@ public sealed class Plugin : IDalamudPlugin
         }
         catch (InvalidOperationException e)
         {
-            Report($"Refusé : {e.Message}");
+            Log.Warning($"Modification de groupe en échec ({e.GetType().Name}).");
+            Report("Modification impossible. Rouvrir la gestion du groupe et réessayer.");
         }
     }
 
@@ -1561,7 +1569,7 @@ public sealed class Plugin : IDalamudPlugin
         var outcome = _groups.OfferPolicy(id, policy);
 
         if (outcome is not (PolicyOffer.Adopted or PolicyOffer.Same))
-            Report($"Refusé : le groupe a changé entre-temps ({outcome}).");
+            Report("Le groupe a changé entre-temps. Rouvrir sa gestion et réessayer.");
     }
 
     /// <summary>Envoie au candidat la réponse d'un modérateur.</summary>
@@ -1571,7 +1579,7 @@ public sealed class Plugin : IDalamudPlugin
         // candidat a été banni pendant qu'elle attendait.
         if (outbound is null)
         {
-            Report("cette demande n'est plus en attente.");
+            Report("Cette demande n'est plus en attente.");
             return;
         }
 
@@ -1585,7 +1593,7 @@ public sealed class Plugin : IDalamudPlugin
             return;
 
         Report(_groups.TryAdd(joined, out var refusal)
-            ? $"Vous avez rejoint {joined.Name}."
+            ? $"Groupe {joined.Name} rejoint."
             : $"Impossible de rejoindre {joined.Name} : {refusal}.");
     }
 
@@ -1610,7 +1618,7 @@ public sealed class Plugin : IDalamudPlugin
             if (policy.IsBanned(_pairing.Id, _state.Self?.Fingerprint))
             {
                 if (_groups.Remove(id))
-                    Report($"Vous avez été exclu du groupe {group.Name}.");
+                    Report($"Exclusion du groupe {group.Name}.");
 
                 return;
             }
@@ -1639,7 +1647,7 @@ public sealed class Plugin : IDalamudPlugin
             catch (Exception e)
             {
                 Log.Error(e, "Action Linkpearl en échec.");
-                Report($"échec : {e.Message}");
+                Report("Action impossible. Réessayer. Si le problème persiste, consulter le journal.");
             }
         }, _shutdown.Token);
 
