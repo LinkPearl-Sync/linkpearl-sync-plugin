@@ -81,8 +81,10 @@ if (args.Length > 0 && args[0] == "federation")
 
 if (args.Length > 0 && args[0] == "cercle-ouvert")
 {
-    // Cinq services tournent à côté : trois ouverts, un d'ancrage, et une
-    // autorité dont la clé publique se relève dans son journal au démarrage.
+    // Six services tournent à côté : trois ouverts, un d'ancrage, une
+    // autorité dont la clé publique se relève dans son journal au démarrage,
+    // et un dernier lancé avec le relais coupé (relayEnabled à false dans
+    // son fichier de réglages).
     Linkpearl.Core.Transport.Rendezvous.RendezvousAddress Address(string text)
     {
         if (Linkpearl.Core.Transport.Rendezvous.RendezvousAddress.TryParse(text, out var parsed, out var why))
@@ -108,7 +110,8 @@ if (args.Length > 0 && args[0] == "cercle-ouvert")
             Anchor: Address(ArgString("--rdv-ancre", "127.0.0.1:47914")),
             Authority: Address(ArgString("--rdv-autorite", "127.0.0.1:47915")),
             AuthorityKey: Convert.FromHexString(authorityKey),
-            TimeoutSeconds: Arg("--timeout", 60)),
+            TimeoutSeconds: Arg("--timeout", 60),
+            NoRelay: Address(ArgString("--rdv-sans-relais", "127.0.0.1:47916"))),
         CancellationToken.None) ? 0 : 1;
     return;
 }

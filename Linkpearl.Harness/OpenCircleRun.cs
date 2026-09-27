@@ -11,17 +11,21 @@ namespace Linkpearl.Harness;
 
 public sealed record OpenCircleSettings(
     IReadOnlyList<RendezvousAddress> Open, RendezvousAddress Anchor, RendezvousAddress Authority,
-    byte[] AuthorityKey, int TimeoutSeconds);
+    byte[] AuthorityKey, int TimeoutSeconds, RendezvousAddress NoRelay);
 
 /// <summary>Journal de console qui compte les appariements passés par le cercle ouvert.</summary>
 internal sealed class CountingLog(string who) : ILogSink
 {
     private readonly ConsoleLog _inner = new(who);
     private int _open;
+    private int _fallbacks;
     private readonly List<string> _relays = [];
     private readonly List<string> _matches = [];
 
     public int OpenMatches => Volatile.Read(ref _open);
+
+    /// <summary>Les replis du relais choisi vers le service d'appariement.</summary>
+    public int Fallbacks => Volatile.Read(ref _fallbacks);
 
     /// <summary>Les services par lesquels un relais s'est ouvert, en « hôte:port ».</summary>
     public IReadOnlyList<string> Relays
@@ -49,6 +53,9 @@ internal sealed class CountingLog(string who) : ILogSink
     {
         if (message.Contains("(réseau ouvert)", StringComparison.Ordinal))
             Interlocked.Increment(ref _open);
+
+        if (message.StartsWith("Relais choisi ", StringComparison.Ordinal) && message.Contains(", repli sur ", StringComparison.Ordinal))
+            Interlocked.Increment(ref _fallbacks);
 
         const string opened = "Relais ouvert par ";
 
@@ -86,6 +93,12 @@ internal sealed class CountingLog(string who) : ILogSink
 /// Le second scénario ne liste que des services morts : l'apparence doit
 /// passer quand même, par l'ancrage. Un cercle ouvert qui deviendrait une
 /// dépendance ferait échouer ce cas.
+///
+/// Le quatrième reprend le troisième, mais le service le plus proche a le
+/// relais coupé : les deux côtés doivent recevoir « relais coupé sur ce
+/// service », le retenir comme refus, et se replier sur le service
+/// d'appariement dans les 25 s, alors que le service garde la première
+/// demande 30 s.
 /// </remarks>
 public static class OpenCircleRun
 {
@@ -113,6 +126,12 @@ public static class OpenCircleRun
             SignWithRegions(key, [.. settings.Open, new RendezvousAddress("127.0.0.1", 47996)]),
             key, settings, expectOpen: true, ct,
             nearestRelay: settings.Open[0]).ConfigureAwait(false);
+
+        ok &= await ScenarioAsync(
+            "relais le plus proche coupé",
+            SignWithRegions(key, [settings.NoRelay, settings.Open[1], settings.Open[2], new RendezvousAddress("127.0.0.1", 47996)]),
+            key, settings, expectOpen: true, ct,
+            nearestRelay: settings.NoRelay, nearestRefuses: true).ConfigureAwait(false);
 
         Console.WriteLine();
         Console.WriteLine(ok ? "TOUT EST PASSÉ" : "ÉCHEC : voir ci-dessus.");
@@ -192,7 +211,7 @@ public static class OpenCircleRun
 
     private static async Task<bool> ScenarioAsync(
         string name, byte[] document, ECDsa key, OpenCircleSettings settings, bool expectOpen, CancellationToken ct,
-        RendezvousAddress? nearestRelay = null)
+        RendezvousAddress? nearestRelay = null, bool nearestRefuses = false)
     {
         Console.WriteLine($"── {name} ──");
 
@@ -343,14 +362,27 @@ public static class OpenCircleRun
             || (relays.Count == 1 && relays[0] == ServiceConsensus.Canonical(wanted)
                 && matches.Count > 0 && matches.Contains(relays[0], StringComparer.Ordinal) is false);
 
-        if (nearestRelay is not null)
-            Console.WriteLine($"   appariement sur {string.Join(", ", matches)}, relais par {string.Join(", ", relays)}");
+        // Relais coupé sur le plus proche : les deux côtés l'ont choisi, s'en
+        // sont vu refuser l'entrée, l'ont retenu comme refus, et relaient par
+        // le service qui les a appariés.
+        var refusedEverywhere = nearestRelay is { } refusing && new[] { aliceLatencies, bobLatencies }.All(latencies =>
+            latencies!.MeasurementsFor(places).Any(m =>
+                m.Service == RelayPlace.FingerprintOf(refusing) && m.RttMs == RelayMeasurement.Unreachable));
+        var fellBack = relays.Count == 1 && matches.Contains(relays[0], StringComparer.Ordinal)
+            && aliceLog.Fallbacks > 0 && bobLog.Fallbacks > 0;
 
-        var good = applied && viaOpen == expectOpen && nearestUsed;
+        if (nearestRelay is not null)
+            Console.WriteLine($"   appariement sur {string.Join(", ", matches)}, relais par {string.Join(", ", relays)}"
+                              + (nearestRefuses ? $", replis {aliceLog.Fallbacks} + {bobLog.Fallbacks}, refus retenu : {(refusedEverywhere ? "oui" : "non")}" : ""));
+
+        var relayGood = nearestRelay is null || (nearestRefuses ? fellBack && refusedEverywhere : nearestUsed);
+        var good = applied && viaOpen == expectOpen && relayGood;
 
         Console.WriteLine($"   {(applied ? "apparence posée" : "aucun appariement")}, "
                         + $"{(viaOpen ? "par le cercle ouvert" : "par l'ancrage")}"
-                        + (nearestRelay is null ? "" : nearestUsed ? ", relais déplacé vers le service le plus proche" : ", relais non déplacé vers le plus proche")
+                        + (nearestRelay is null ? ""
+                           : nearestRefuses ? (relayGood ? ", relais refusé puis repli sur le service d'appariement" : ", pas de repli conforme après le refus")
+                           : nearestUsed ? ", relais déplacé vers le service le plus proche" : ", relais non déplacé vers le plus proche")
                         + $", attendu : posée {(expectOpen ? "par le cercle ouvert" : "par l'ancrage")} → {(good ? "conforme" : "ÉCHEC")}");
 
         try
