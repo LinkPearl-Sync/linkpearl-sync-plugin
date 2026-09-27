@@ -18,7 +18,8 @@
     "pagesBannissementMax": 64,
     "octetsParPageConsensus": 32768,
     "pagesConsensusMax": 16,
-    "entreesConsensusMax": 1024
+    "entreesConsensusMax": 1024,
+    "tailleRegion": 2
   },
   "trames": [
     {
@@ -116,6 +117,18 @@
     {
       "nom": "etat-reseau-page",
       "hex": "1a00000002abcd"
+    },
+    {
+      "nom": "consensus-v2-demande",
+      "hex": "1b0001"
+    },
+    {
+      "nom": "consensus-v2-page",
+      "hex": "1c00000002abcd"
+    },
+    {
+      "nom": "consensus-v2-document",
+      "hex": "6c696e6b706561726c3a636f6e73656e7375733a763200000007000000006ab13b80000000006aba76000002107264762e616d692e63683a343739303003416d690f0f0f0f0f0f0f0f4555117264762e6c6f696e2e63683a3437393030044c6f696e1e1e1e1e1e1e1e1e0000015a5a5a5a5a5a5a5a5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b"
     }
   ]
 }

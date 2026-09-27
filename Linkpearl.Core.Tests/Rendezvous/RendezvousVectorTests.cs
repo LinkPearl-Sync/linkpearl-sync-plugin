@@ -70,6 +70,13 @@ public class RendezvousVectorTests
             [new ConsensusSignature(Repeat(0x5A, 8), Repeat(0x5B, 64))])),
         ("etat-reseau-demande", () => RendezvousWire.NetworkStatusQuery(1)),
         ("etat-reseau-page", () => RendezvousWire.NetworkStatusPage(0, 2, new byte[] { 0xAB, 0xCD })),
+        ("consensus-v2-demande", () => RendezvousWire.ConsensusV2Query(1)),
+        ("consensus-v2-page", () => RendezvousWire.ConsensusV2Page(0, 2, new byte[] { 0xAB, 0xCD })),
+        ("consensus-v2-document", () => ServiceConsensus.AssembleV2(
+            new ServiceConsensus(7, 1_790_000_000, 1_790_604_800,
+                [new ConsensusEntry("rdv.ami.ch:47900", "Ami", Repeat(0x0F, 8), "EU"),
+                 new ConsensusEntry("rdv.loin.ch:47900", "Loin", Repeat(0x1E, 8))]),
+            [new ConsensusSignature(Repeat(0x5A, 8), Repeat(0x5B, 64))])),
     ];
 
     /// <summary>Les vecteurs, retrouvés dans les sources du dépôt.</summary>
@@ -140,6 +147,7 @@ public class RendezvousVectorTests
     [InlineData("octetsParPageConsensus", RendezvousWire.ConsensusPageBytes)]
     [InlineData("pagesConsensusMax", RendezvousWire.MaxConsensusPages)]
     [InlineData("entreesConsensusMax", ServiceConsensus.MaxEntries)]
+    [InlineData("tailleRegion", ServiceConsensus.RegionSize)]
     public void Les_plafonds_sont_les_memes_des_deux_cotes(string name, int expected)
     {
         // Un plafond qui diverge ne casse pas le format : il fait refuser chez

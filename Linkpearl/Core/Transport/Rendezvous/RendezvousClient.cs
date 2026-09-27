@@ -214,14 +214,21 @@ public sealed class RendezvousClient : IAsyncDisposable
     /// signature, faite par l'appelant. Une page manquante ou incohérente
     /// rend un échec lisible, jamais une exception.
     /// </remarks>
-    public async Task<(byte[]? Document, string? Failure)> QueryConsensusAsync(CancellationToken ct)
+    public Task<(byte[]? Document, string? Failure)> QueryConsensusAsync(CancellationToken ct)
+        => QueryConsensusPagesAsync(v2: false, ct);
+
+    /// <summary>La liste signée v2, avec les régions. Une autorité d'avant la refuse.</summary>
+    public Task<(byte[]? Document, string? Failure)> QueryConsensusV2Async(CancellationToken ct)
+        => QueryConsensusPagesAsync(v2: true, ct);
+
+    private async Task<(byte[]? Document, string? Failure)> QueryConsensusPagesAsync(bool v2, CancellationToken ct)
     {
         using var document = new MemoryStream();
         var total = 1;
 
         for (var page = 0; page < total; page++)
         {
-            await SendAsync(RendezvousWire.ConsensusQuery(page), ct).ConfigureAwait(false);
+            await SendAsync(v2 ? RendezvousWire.ConsensusV2Query(page) : RendezvousWire.ConsensusQuery(page), ct).ConfigureAwait(false);
 
             var frame = await ReadFrameAsync(ct).ConfigureAwait(false);
 
@@ -231,7 +238,11 @@ public sealed class RendezvousClient : IAsyncDisposable
             if (frame[0] == RendezvousKind.Error)
                 return (null, System.Text.Encoding.UTF8.GetString(frame.AsSpan(1)));
 
-            if (RendezvousWire.TryReadConsensusPage(frame, out var index, out var count, out var chunk, out var why) is false)
+            var read = v2
+                ? RendezvousWire.TryReadConsensusV2Page(frame, out var index, out var count, out var chunk, out var why)
+                : RendezvousWire.TryReadConsensusPage(frame, out index, out count, out chunk, out why);
+
+            if (read is false)
                 return (null, why);
 
             if (index != page || (page > 0 && count != total))

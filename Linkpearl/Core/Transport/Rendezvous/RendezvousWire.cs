@@ -66,6 +66,16 @@ public static class RendezvousKind
 
     /// <summary>Une page : son numéro, le nombre de pages, puis une tranche du JSON d'état.</summary>
     public const byte NetworkStatusPage = 0x1A;
+
+    /// <summary>Demande une page de la liste signée v2, celle qui porte les régions.</summary>
+    /// <remarks>
+    /// Une requête à part plutôt qu'un drapeau : une autorité d'avant répond
+    /// « trame inattendue », et le client sait alors redemander la v1.
+    /// </remarks>
+    public const byte ConsensusV2Query = 0x1B;
+
+    /// <summary>Une page de la liste signée v2.</summary>
+    public const byte ConsensusV2Page = 0x1C;
 }
 
 /// <summary>Ce qu'un client annonce au rendez-vous.</summary>
@@ -565,6 +575,18 @@ public static class RendezvousWire
     public static bool TryReadConsensusPage(
         ReadOnlySpan<byte> frame, out int page, out int pages, out byte[] chunk, out string? rejection)
         => TryReadChunkPage(RendezvousKind.ConsensusPage, "page de liste signée malformée", frame, out page, out pages, out chunk, out rejection);
+
+    public static byte[] ConsensusV2Query(int page) => PageQuery(RendezvousKind.ConsensusV2Query, page);
+
+    public static bool TryReadConsensusV2Query(ReadOnlySpan<byte> frame, out int page)
+        => TryReadPageQuery(RendezvousKind.ConsensusV2Query, frame, out page);
+
+    public static byte[] ConsensusV2Page(int page, int pages, ReadOnlySpan<byte> chunk)
+        => ChunkPage(RendezvousKind.ConsensusV2Page, page, pages, chunk);
+
+    public static bool TryReadConsensusV2Page(
+        ReadOnlySpan<byte> frame, out int page, out int pages, out byte[] chunk, out string? rejection)
+        => TryReadChunkPage(RendezvousKind.ConsensusV2Page, "page de liste signée v2 malformée", frame, out page, out pages, out chunk, out rejection);
 
     /// <summary>
     /// Une page de l'état public du réseau, découpé comme la liste signée.
