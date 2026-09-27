@@ -106,4 +106,30 @@ public class RelayMeasurementsTests
 
         Assert.Equal(RelayMeasurements.Far, Assert.Single(synthetic).RttMs);
     }
+
+    [Fact]
+    public void L_ordre_sur_le_fil_ne_depend_pas_de_l_ordre_recu()
+    {
+        RelayMeasurement near = new(0xA0A0A0A0A0A0A0A0, 5), far = new(0x0102030405060708, 90);
+
+        Assert.Equal(RelayMeasurements.Encode([far, near]), RelayMeasurements.Encode([near, far]));
+    }
+
+    [Fact]
+    public void En_relais_seul_l_ordre_ne_trahit_pas_le_classement_reel()
+    {
+        var eu1 = new RelayPlace(new RendezvousAddress("rdv.eu1.ch", 47900), "EU", true);
+        var eu2 = new RelayPlace(new RendezvousAddress("rdv.eu2.fr", 47900), "EU", true);
+        var na = new RelayPlace(new RendezvousAddress("rdv.na.us", 47900), "NA", true);
+        RelayPlace[] eligible = [eu1, eu2, na];
+
+        // Les deux listes arrivent triées par vrai RTT, comme MeasurementsFor
+        // les rend : le classement réel des deux services européens s'inverse.
+        var first = RelayMeasurements.Synthetic(eligible, [new(eu1.Fingerprint, 15), new(eu2.Fingerprint, 40), new(na.Fingerprint, 90)]);
+        var second = RelayMeasurements.Synthetic(eligible, [new(eu2.Fingerprint, 15), new(eu1.Fingerprint, 40), new(na.Fingerprint, 90)]);
+
+        Assert.Equal(first, second);
+        Assert.Equal(first.OrderBy(m => m.Service), first);
+        Assert.Equal(RelayMeasurements.Encode(first), RelayMeasurements.Encode(second));
+    }
 }

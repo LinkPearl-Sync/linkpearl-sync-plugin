@@ -37,7 +37,10 @@ public static class RelayMeasurements
 
     public static byte[] Encode(IReadOnlyList<RelayMeasurement> measurements)
     {
-        var kept = measurements.Take(MaxMeasurements).ToList();
+        // Triées par empreinte : l'ordre reçu suit le vrai RTT, et le garder
+        // sur le fil trahirait le classement des services même quand les
+        // valeurs sont synthétiques.
+        var kept = measurements.Take(MaxMeasurements).OrderBy(m => m.Service).ToList();
         var length = 1 + kept.Count * EntrySize;
         var block = new byte[3 + length];
 
@@ -112,17 +115,25 @@ public static class RelayMeasurements
             .GroupBy(place => place.Fingerprint)
             .ToDictionary(group => group.Key, group => group.First().Region);
 
-        var nearest = measured
-            .Where(m => m.RttMs != RelayMeasurement.Unreachable && regionOf.GetValueOrDefault(m.Service) is not null)
-            .OrderBy(m => m.RttMs)
-            .ThenBy(m => m.Service)
-            .Select(m => regionOf[m.Service])
+        var placed = measured
+            .Select(m => (Measurement: m, Region: regionOf.GetValueOrDefault(m.Service)))
+            .ToList();
+
+        var nearest = placed
+            .Where(p => p.Measurement.RttMs != RelayMeasurement.Unreachable && p.Region is not null)
+            .OrderBy(p => p.Measurement.RttMs)
+            .ThenBy(p => p.Measurement.Service)
+            .Select(p => p.Region)
             .FirstOrDefault();
 
-        return [.. measured.Select(m => new RelayMeasurement(
-            m.Service,
-            m.RttMs == RelayMeasurement.Unreachable ? RelayMeasurement.Unreachable
-            : nearest is not null && regionOf.GetValueOrDefault(m.Service) == nearest ? (ushort)0
-            : Far))];
+        // Rendues par empreinte, comme Encode les écrit : l'ordre d'entrée est
+        // celui des vrais RTT, précisément ce que ce mode doit taire.
+        return [.. placed
+            .OrderBy(p => p.Measurement.Service)
+            .Select(p => new RelayMeasurement(
+                p.Measurement.Service,
+                p.Measurement.RttMs == RelayMeasurement.Unreachable ? RelayMeasurement.Unreachable
+                : nearest is not null && p.Region == nearest ? (ushort)0
+                : Far))];
     }
 }
