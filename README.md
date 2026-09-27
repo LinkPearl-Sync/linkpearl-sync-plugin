@@ -119,13 +119,13 @@ At the top of the **Groupes** (Groups) page, the **Public** card, off by default
 
 ### Services' ban lists
 
-Each rendezvous service in your list can publish a list of banned characters. A character listed by one of your services is not paired, not admitted into your groups, not seen through Public, and their appearance is not applied on your side, even if they are one of your pairs. Their row carries the **banni par un service** (banned by a service) chip, with the reason on hover. Such a list is a matter of reputation, not proof: turning a service off or removing it from your settings lifts its bans. Open-circle services cannot ban anyone.
+Each rendezvous service in your list can publish a list of banned characters. A character listed by one of your services is not paired, not admitted into your groups, not seen through Public, and their appearance is not applied on your side, even if they are one of your pairs. Their row carries the **banni par un service** (banned by a service) chip, with the reason on hover. Such a list is a matter of reputation, not proof: turning a service off or removing it from your settings lifts its bans. Open-network services cannot ban anyone.
 
 ---
 
-## The open circle
+## The open network
 
-Once paired, you and your pair also meet through two services run by volunteers, picked from a list signed by the project's authority (rdv.linkpearl.eorzea.events). A service enters it on its own, after 72 hours of answering at least 95% of checks, and never sees a key or a character name: pairing itself, Public and group members you have not met yet stay on the services in your list. If neither of your two services answers within 10 seconds, or no valid list is held, everything goes back to your list. The list is fetched again every six hours. The **Cercle ouvert** (open circle) switch, under **Réglages > Réseau** (Settings > Network), is on by default. [Who is in it](https://linkpearl-sync.github.io/reseau.html).
+Once paired, you and your pair also meet through two services run by volunteers, picked from a list signed by the project's authority (rdv.linkpearl.eorzea.events). A service enters it on its own, after 72 hours of answering at least 95% of checks, and never sees a key or a character name: pairing itself, Public and group members you have not met yet stay on the services in your list. If neither of your two services answers within 10 seconds, or no valid list is held, everything goes back to your list. The list is fetched again every six hours. The **Réseau ouvert** (open network) switch, under **Réglages > Réseau** (Settings > Network), is on by default. [Who is in it](https://linkpearl-sync.github.io/reseau.html).
 
 ---
 
@@ -133,10 +133,10 @@ Once paired, you and your pair also meet through two services run by volunteers,
 
 - Your files leave your game only for your pairs, the members of your groups and, if you enabled Public, the visible players who enabled it too. Always end-to-end encrypted.
 - For two players to find each other, Linkpearl goes through **rendezvous services**. They never see your files or your looks. The services in your list do see pairing requests go by, with the characters' names and public keys, and the IP addresses of those who use them.
-- Open-circle services see your IP address, when you and a pair announce yourselves, and the volume of a relayed session, but no name, key or file.
+- Open-network services see your IP address, when you and a pair announce yourselves, and the volume of a relayed session, but no name, key or file.
 - If you keep **Me signaler aux autres joueurs** (let other players see me, on by default), the service can know that your character is online: that is what lets others recognise you. You can turn it off in **Réglages > Visibilité** (Settings > Visibility).
 - Joining a group also goes through the rendezvous service, which sees the code and the character's name and world. As with pairing, trust is established on first contact: for a group with a password, a long password is what really protects it.
-- You can host your own rendezvous service in one command: see [Host a rendezvous](https://linkpearl-sync.github.io/heberger.html) (Linux with systemd; the server then updates itself), or the [step-by-step guide](https://linkpearl-sync.github.io/expert.html#self-host). You and your friends just need to share at least one. By default a new service also applies to the open circle, and joins it after 72 hours of reliable answers (`--no-announce` to stay out).
+- You can host your own rendezvous service in one command: see [Host a rendezvous](https://linkpearl-sync.github.io/heberger.html) (Linux with systemd; the server then updates itself), or the [step-by-step guide](https://linkpearl-sync.github.io/expert.html#self-host). You and your friends just need to share at least one. By default a new service also applies to the open network, and joins it after 72 hours of reliable answers (`--no-announce` to stay out).
 
 ---
 
@@ -144,4 +144,4 @@ Once paired, you and your pair also meet through two services run by volunteers,
 
 Open an [issue](https://github.com/LinkPearl-Sync/linkpearl-sync-plugin/issues) describing what you did and what you saw. The Dalamud log (`/xllog`) helps a lot. Issues in English or French are both welcome.
 
-For the curious, [the technical page](https://linkpearl-sync.github.io/expert.html) explains connections, encryption and federation, and [the network page](https://linkpearl-sync.github.io/reseau.html) shows the open circle live. For contributors, the design and the protocol are described in [`docs/`](docs/) (in French).
+For the curious, [the technical page](https://linkpearl-sync.github.io/expert.html) explains connections, encryption and federation, and [the network page](https://linkpearl-sync.github.io/reseau.html) shows the open network live. For contributors, the design and the protocol are described in [`docs/`](docs/) (in French).
