@@ -5,6 +5,20 @@ using Linkpearl.Core.Safety;
 
 namespace Linkpearl.Core.Transport.Rendezvous;
 
+/// <summary>La réponse d'un service à une demande de relais.</summary>
+/// <remarks>Propre au client, elle ne traverse pas le réseau : le service répond par une trame.</remarks>
+public enum RelayAnswer
+{
+    /// <summary>Le pair est là, le relais porte.</summary>
+    Ready,
+
+    /// <summary>Le service dit ne pas relayer : un refus à retenir.</summary>
+    Disabled,
+
+    /// <summary>Pas de relais cette fois, sans que le service l'ait refusé.</summary>
+    Unavailable,
+}
+
 /// <summary>
 /// Client du service de rendez-vous.
 /// </summary>
@@ -367,12 +381,41 @@ public sealed class RendezvousClient : IAsyncDisposable
 
     /// <summary>Demande un relais et attend que le pair en fasse autant.</summary>
     public async Task<bool> OpenRelayAsync(ReadOnlyMemory<byte> ticket, CancellationToken ct)
+        => await RequestRelayAsync(ticket, ct).ConfigureAwait(false) is RelayAnswer.Ready;
+
+    /// <summary>Comme <see cref="OpenRelayAsync"/>, en distinguant un service qui ne relaie pas.</summary>
+    public async Task<RelayAnswer> RequestRelayAsync(ReadOnlyMemory<byte> ticket, CancellationToken ct)
     {
         await SendAsync(RendezvousWire.RelayOpen(ticket.Span), ct).ConfigureAwait(false);
 
-        var frame = await ReadFrameAsync(ct).ConfigureAwait(false);
-        return frame is not null && frame[0] == RendezvousKind.RelayReady;
+        return RelayAnswerOf(await ReadFrameAsync(ct).ConfigureAwait(false));
     }
+
+    /// <summary>
+    /// Le texte d'erreur d'un service dont le relais est coupé.
+    /// </summary>
+    /// <remarks>
+    /// Recopie littérale du message du service (<c>HandleRelayAsync</c>), seul
+    /// cas où il dit ne pas relayer du tout. Le changer là-bas sans le changer
+    /// ici ferait passer chaque refus pour un silence : le relais choisi serait
+    /// retenté à chaque connexion, sans rien casser d'autre.
+    /// </remarks>
+    public const string RelayDisabledReason = "relais coupé sur ce service";
+
+    /// <summary>Ce que dit la réponse du service à une demande de relais.</summary>
+    /// <remarks>
+    /// Seul un relais coupé est un refus. « trop de demandes de relais » est
+    /// une limite de débit par adresse, passagère : la retenir une journée
+    /// écarterait un bon relais pour un pic de reconnexions. Une fin de flux
+    /// est un redémarrage ou une coupure, pas une décision du service.
+    /// </remarks>
+    public static RelayAnswer RelayAnswerOf(byte[]? frame) => frame switch
+    {
+        [RendezvousKind.RelayReady, ..] => RelayAnswer.Ready,
+        [RendezvousKind.Error, .. var reason]
+            when System.Text.Encoding.UTF8.GetString(reason) == RelayDisabledReason => RelayAnswer.Disabled,
+        _ => RelayAnswer.Unavailable,
+    };
 
     public Task SendRelayAsync(ReadOnlyMemory<byte> payload, CancellationToken ct)
         => SendAsync(RendezvousWire.RelayData(payload.Span), ct);

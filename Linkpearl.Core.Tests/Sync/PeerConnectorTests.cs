@@ -1,4 +1,7 @@
+using System.Net;
+using System.Net.Sockets;
 using System.Security.Cryptography;
+using Linkpearl.Core.Transport;
 using Linkpearl.Core.Sync;
 using Linkpearl.Core.Transport.Rendezvous;
 using Xunit;
@@ -320,6 +323,119 @@ public class PeerConnectorTests
         Assert.Equal(measures, RelayMeasurements.TryRead(plain.AsSpan(consumed)));
     }
 
+    [Fact]
+    public async Task Une_annulation_pendant_le_relais_choisi_ne_tente_pas_le_repli()
+    {
+        using var stop = new CancellationTokenSource();
+        var relays = new CancellingRelays(stop);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => PeerConnector.RelayWithFallbackAsync(
+            relays, Relay("proche.us"), Relay("suisse.ch"), new byte[16], new SilentLog(), null, stop.Token));
+
+        Assert.Equal(["proche.us"], relays.Opened);
+    }
+
+    [Theory]
+    [InlineData("relais coupé sur ce service", true)]
+    [InlineData("trop de demandes de relais", false)]
+    [InlineData("autre erreur", false)]
+    [InlineData(null, false)]
+    public async Task Seul_un_relais_coupe_est_retenu_comme_refus(string? error, bool remembered)
+    {
+        // Un vrai client contre deux faux services en boucle locale. Le choisi
+        // répond l'erreur, ou coupe sans répondre quand il n'y en a pas ; celui
+        // d'appariement coupe toujours, pour que le repli finisse aussitôt.
+        using var chosenService = new FakeRelayService(error);
+        using var matchedService = new FakeRelayService(null);
+
+        using var links = new PeerLinkFactory(2, new SilentLog());
+        var connector = new PeerConnector(links, new RendezvousEndpoint("127.0.0.1", chosenService.Port), new MovableClock(), new SilentLog());
+        var refused = new List<RendezvousAddress>();
+        using var bounded = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        var (link, _) = await PeerConnector.RelayWithFallbackAsync(
+            connector, chosenService.Place, matchedService.Place, new byte[RendezvousTicket.SizeInBytes],
+            new SilentLog(), refused.Add, bounded.Token);
+
+        Assert.Null(link);
+        Assert.Equal(remembered ? 1 : 0, refused.Count);
+        Assert.Equal(1, matchedService.Served);
+    }
+
+    /// <summary>Un service qui lit une demande, répond une erreur ou rien, puis coupe.</summary>
+    private sealed class FakeRelayService : IDisposable
+    {
+        private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
+        private readonly CancellationTokenSource _stop = new();
+        private int _served;
+
+        public FakeRelayService(string? error)
+        {
+            _listener.Start();
+            _ = ServeAsync(error);
+        }
+
+        public int Port => ((IPEndPoint)_listener.LocalEndpoint).Port;
+
+        public int Served => Volatile.Read(ref _served);
+
+        public RelayPlace Place => new(new RendezvousAddress("127.0.0.1", Port), null, false);
+
+        private async Task ServeAsync(string? error)
+        {
+            try
+            {
+                while (true)
+                {
+                    using var socket = await _listener.AcceptTcpClientAsync(_stop.Token);
+                    var stream = socket.GetStream();
+                    var header = new byte[4];
+                    await stream.ReadExactlyAsync(header, _stop.Token);
+                    await stream.ReadExactlyAsync(new byte[System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(header)], _stop.Token);
+
+                    if (error is not null)
+                        await stream.WriteAsync(RendezvousWire.Frame(RendezvousWire.Error(error)), _stop.Token);
+
+                    Interlocked.Increment(ref _served);
+                }
+            }
+            catch (Exception) when (_stop.IsCancellationRequested)
+            {
+                // Arrêté par le test.
+            }
+        }
+
+        public void Dispose()
+        {
+            _stop.Cancel();
+            _listener.Stop();
+            _stop.Dispose();
+        }
+    }
+
+    [Fact]
+    public void La_reponse_du_service_se_lit_en_trois_issues()
+    {
+        Assert.Equal(RelayAnswer.Ready, RendezvousClient.RelayAnswerOf([RendezvousKind.RelayReady]));
+        Assert.Equal(RelayAnswer.Disabled, RendezvousClient.RelayAnswerOf(RendezvousWire.Error(RendezvousClient.RelayDisabledReason)));
+        Assert.Equal(RelayAnswer.Unavailable, RendezvousClient.RelayAnswerOf(RendezvousWire.Error("trop de demandes de relais")));
+        Assert.Equal(RelayAnswer.Unavailable, RendezvousClient.RelayAnswerOf(null));
+        Assert.Equal(RelayAnswer.Unavailable, RendezvousClient.RelayAnswerOf([RendezvousKind.Matched]));
+    }
+
+    /// <summary>Annule pendant le premier essai, puis rend un silence, comme un ouvreur qui avalerait l'annulation.</summary>
+    private sealed class CancellingRelays(CancellationTokenSource stop) : IRelayOpener
+    {
+        public List<string> Opened { get; } = [];
+
+        public async Task<RelayOpening> OpenAsync(RelayPlace place, byte[] ticket, TimeSpan budget, CancellationToken ct)
+        {
+            Opened.Add(place.At.Host);
+            await stop.CancelAsync();
+            return new RelayOpening(null, false);
+        }
+    }
+
     private sealed class ThrowingDialer : IRendezvousDialer
     {
         public Task<byte[]?> AnnounceAsync(
@@ -349,6 +465,14 @@ public class CandidateSealingTests
         Assert.True(PeerConnector.TryOpenCandidates(Secret, sealedBlock, out var plain));
         Assert.True(CandidateSet.TryDecode(plain, out var decoded, out _));
         Assert.Equal(Candidates, decoded);
+    }
+
+    [Fact]
+    public void Sans_mesures_le_clair_est_celui_d_avant()
+    {
+        // Un pair d'avant les mesures lit ce bloc : rien ne doit suivre les adresses.
+        Assert.True(PeerConnector.TryOpenCandidates(Secret, PeerConnector.SealCandidates(Secret, Candidates), out var plain));
+        Assert.Equal(CandidateSet.Encode(Candidates), plain);
     }
 
     [Fact]

@@ -142,6 +142,10 @@ public sealed class PeerConnector(
         if (first.Link is not null)
             return Opened(first.Link, chosen.At, log);
 
+        // Une annulation pendant le premier essai arrête tout : le repli
+        // ouvrirait une connexion de plus sous un jeton déjà annulé.
+        ct.ThrowIfCancellationRequested();
+
         if (first.Refused)
             refused?.Invoke(chosen.At);
 
@@ -447,12 +451,23 @@ public sealed class PeerConnector(
             // centaines de millisecondes d'écart suffisent à l'éviter.
             await Task.Delay(Random.Shared.Next(0, 400), deadline.Token).ConfigureAwait(false);
 
-            if (await client.OpenRelayAsync(ticket, deadline.Token).ConfigureAwait(false))
+            var answer = await client.RequestRelayAsync(ticket, deadline.Token).ConfigureAwait(false);
+
+            if (answer is RelayAnswer.Ready)
                 return new RelayOpening(new RelayPeerLink(new RendezvousRelayPipe(client), new DnsEndPoint(place.At.Host, place.At.Port)), false);
 
-            log.Info($"Relais refusé par {place.At.Host}.");
+            log.Info(answer is RelayAnswer.Disabled
+                ? $"Relais refusé par {place.At.Host}."
+                : $"Relais par {place.At.Host} indisponible pour l'instant.");
             await client.DisposeAsync().ConfigureAwait(false);
-            return new RelayOpening(null, true);
+            return new RelayOpening(null, answer is RelayAnswer.Disabled);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Annulé de l'extérieur, pas par le budget : on s'arrête, sans
+            // prétendre à un silence qui enverrait tenter le repli.
+            await client.DisposeAsync().ConfigureAwait(false);
+            throw;
         }
         catch (Exception e) when (e is OperationCanceledException or IOException or System.Net.Sockets.SocketException)
         {
