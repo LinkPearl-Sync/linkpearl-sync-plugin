@@ -736,7 +736,8 @@ service, ce qui en AES-GCM livre le XOR des clairs et de quoi forger des
 étiquettes. Changer l'étiquette de dérivation retire aussi du jeu la clé dont
 le format 1 a pu laisser fuir de quoi forger.
 
-Un pair en mode **relais seul** envoie un bloc à zéro candidat.
+Un pair en mode **relais seul** envoie un bloc à zéro candidat, suivi de
+l'extension de mesures (voir « Choix du relais »).
 
 **Perçage.** Si les deux blocs portent au moins une adresse, chaque côté tente
 une connexion UDP (LiteNetLib) vers toutes les adresses de l'autre, pendant dix
@@ -744,7 +745,7 @@ secondes. La décision ne dépend que des deux blocs, que les deux côtés voien
 l'identique : ils tentent le perçage ensemble, ou passent au relais ensemble.
 
 **Relais.** Sinon, ou si le perçage échoue, chaque côté ouvre le relais sur le
-service qui a apparié, sous un jeton que les deux calculent sans échange :
+service qui a apparié, ou le relais choisi (voir « Choix du relais »), sous un jeton que les deux calculent sans échange :
 
 ```
 jeton_relais = HMAC-SHA256(secret, "linkpearl:relay:v1" || min(blocA, blocB) || max(blocA, blocB))[0..16]
@@ -773,7 +774,8 @@ service   = SHA-256(adresse canonique)[0..8]
 en relais seul envoie `0` pour sa région la plus proche, `1000` pour les autres
 services joignables, `0xFFFF` pour les injoignables, jamais de vrai RTT : des
 RTT vers plusieurs continents laisseraient trianguler l'adresse que ce mode
-cache. Un client d'avant s'arrête à ses adresses et ignore l'extension ; une
+cache. Les mesures s'écrivent triées par empreinte, jamais dans l'ordre des
+RTT : l'ordre ne porte ainsi aucune information. Un client d'avant s'arrête à ses adresses et ignore l'extension ; une
 extension illisible vaut pour absente.
 
 Les RTT se mesurent en tâche de fond, par la réflexion UDP que tout service
@@ -1029,6 +1031,8 @@ Ce qu'un tiers ou un rendez-vous peut faire consommer, et ce qui l'arrête.
 | Échecs de mot de passe | 5 par clé de candidat et par fenêtre de 30 min, par membre | `AdmissionHost` |
 | Liste signée | 1 024 entrées, 16 pages de 32 Kio, 16 pages servies par connexion | `ServiceConsensus`, `RendezvousWire` |
 | Admissions au réseau ouvert | 5 par jour, 2 par famille | `AuthorityLedger` (service) |
+| Mesures de RTT dans le bloc de candidats | 16 (relever ce plafond exige une nouvelle étiquette : un client d'avant rejette l'extension entière) | `RelayMeasurements` |
+| Services mesurés par cycle | 64 | `RelayLatencies` |
 
 Un rendez-vous malveillant peut toujours refuser tout service : c'est la
 raison d'être de la liste de services. Un pair malveillant, déjà au carnet,
@@ -1045,6 +1049,24 @@ Le chiffrement protège le contenu, pas les métadonnées.
 | Le pair | votre adresse IP, publique et locales | vos adresses aussi si le relais suit un perçage raté ; aucune en mode relais seul |
 | Le rendez-vous | votre adresse IP, vos horaires de présence, que vous vous annoncez, la taille du bloc de candidats | tout cela, plus la durée, le volume et le rythme de la session relayée |
 | Le réseau | les deux adresses, les volumes, les horaires | votre adresse et celle du service |
+
+Le choix du relais ajoute ceci :
+
+- **Le pair** apprend vos RTT vers les services éligibles de la paire, ou
+  seulement votre continent en mode relais seul.
+- **Les services éligibles** (les deux du placement, le meilleur de chaque
+  région, l'ancrage, pour chaque paire, jusqu'à 64 par cycle) reçoivent un ping
+  UDP depuis votre adresse toutes les trente minutes, y compris ceux où vous ne
+  vous annoncez jamais. Chacun voit donc votre adresse IP et vos horaires de
+  présence.
+- **Le service qui relaie** peut ne pas être celui qui a apparié : un
+  troisième service voit alors vos adresses, la durée et le volume de la
+  session relayée.
+- **Un pair** peut orienter le relais vers n'importe lequel de vos services
+  éligibles en déclarant les autres injoignables. C'est borné aux éligibles,
+  que le hasard du secret de paire désigne, et le handshake reste authentifié
+  de bout en bout ; mais si ce pair opère lui-même un service éligible, il peut
+  y attirer le relais et y voir votre adresse et votre trafic chiffré.
 
 S'y ajoute, au pairage, tout le contenu des demandes (voir
 [Pairage](#pairage)), à l'admission dans un groupe le code, le nom, le monde et
