@@ -391,17 +391,6 @@ public sealed class RendezvousClient : IAsyncDisposable
         return RelayAnswerOf(await ReadFrameAsync(ct).ConfigureAwait(false));
     }
 
-    /// <summary>
-    /// Le texte d'erreur d'un service dont le relais est coupé.
-    /// </summary>
-    /// <remarks>
-    /// Recopie littérale du message du service (<c>HandleRelayAsync</c>), seul
-    /// cas où il dit ne pas relayer du tout. Le changer là-bas sans le changer
-    /// ici ferait passer chaque refus pour un silence : le relais choisi serait
-    /// retenté à chaque connexion, sans rien casser d'autre.
-    /// </remarks>
-    public const string RelayDisabledReason = "relais coupé sur ce service";
-
     /// <summary>Ce que dit la réponse du service à une demande de relais.</summary>
     /// <remarks>
     /// Seul un relais coupé est un refus. « trop de demandes de relais » est
@@ -413,7 +402,7 @@ public sealed class RendezvousClient : IAsyncDisposable
     {
         [RendezvousKind.RelayReady, ..] => RelayAnswer.Ready,
         [RendezvousKind.Error, .. var reason]
-            when System.Text.Encoding.UTF8.GetString(reason) == RelayDisabledReason => RelayAnswer.Disabled,
+            when System.Text.Encoding.UTF8.GetString(reason) == RendezvousWire.RelayDisabledReason => RelayAnswer.Disabled,
         _ => RelayAnswer.Unavailable,
     };
 

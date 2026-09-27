@@ -417,7 +417,7 @@ public class PeerConnectorTests
     public void La_reponse_du_service_se_lit_en_trois_issues()
     {
         Assert.Equal(RelayAnswer.Ready, RendezvousClient.RelayAnswerOf([RendezvousKind.RelayReady]));
-        Assert.Equal(RelayAnswer.Disabled, RendezvousClient.RelayAnswerOf(RendezvousWire.Error(RendezvousClient.RelayDisabledReason)));
+        Assert.Equal(RelayAnswer.Disabled, RendezvousClient.RelayAnswerOf(RendezvousWire.Error(RendezvousWire.RelayDisabledReason)));
         Assert.Equal(RelayAnswer.Unavailable, RendezvousClient.RelayAnswerOf(RendezvousWire.Error("trop de demandes de relais")));
         Assert.Equal(RelayAnswer.Unavailable, RendezvousClient.RelayAnswerOf(null));
         Assert.Equal(RelayAnswer.Unavailable, RendezvousClient.RelayAnswerOf([RendezvousKind.Matched]));

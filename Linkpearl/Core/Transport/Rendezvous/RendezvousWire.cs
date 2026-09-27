@@ -106,6 +106,17 @@ public static class RendezvousWire
     public const int MaxTicketsPerAnnouncement = 8;
     public const int MaxSealedCandidatesLength = 4096;
 
+    /// <summary>
+    /// Le texte d'erreur d'un service dont le relais est coupé.
+    /// </summary>
+    /// <remarks>
+    /// Seul cas où le service dit ne pas relayer du tout, et le client en fait
+    /// un refus retenu une journée. Ici, dans le fichier que le service recopie,
+    /// pour que les deux côtés lisent la même chaîne : un littéral de chaque
+    /// côté ferait, au premier écart, passer chaque refus pour un silence.
+    /// </remarks>
+    public const string RelayDisabledReason = "relais coupé sur ce service";
+
     public static byte[] Announce(Announcement announcement)
     {
         var body = new List<byte> { RendezvousKind.Announce, (byte)announcement.Tickets.Count };
