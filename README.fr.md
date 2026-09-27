@@ -122,7 +122,7 @@ Chaque service de rendez-vous de votre liste peut publier une liste de personnag
 
 ## Le réseau ouvert
 
-Une fois pairés, vous et votre pair vous retrouvez aussi par deux services tenus par des bénévoles, tirés d'une liste signée par l'autorité du projet (rdv.linkpearl.eorzea.events). Un service y entre de lui-même, après 72 heures à répondre à au moins 95 % des sondes, et ne voit jamais ni clé ni nom de personnage : le pairage lui-même, le Public et les membres de groupe que vous n'avez pas encore croisés restent sur les services de votre liste. Si aucun de vos deux services ne répond sous 10 secondes, ou sans liste valable, tout repasse par votre liste. La liste est relue toutes les six heures. L'interrupteur **Réseau ouvert**, sous **Réglages > Réseau**, est activé par défaut. [Qui en fait partie](https://linkpearl-sync.github.io/reseau.html#fr).
+Une fois pairés, vous et votre pair vous retrouvez aussi par deux services tenus par des bénévoles, tirés d'une liste signée par l'autorité du projet (rdv.linkpearl.eorzea.events). Un service y entre de lui-même, après 72 heures à répondre à au moins 95 % des sondes, et ne voit jamais ni clé ni nom de personnage : le pairage lui-même, le Public et les membres de groupe que vous n'avez pas encore croisés restent sur les services de votre liste. Si aucun de vos deux services ne répond sous 10 secondes, ou sans liste valable, tout repasse par votre liste. La liste est relue chaque heure, et aussitôt quand vous rallumez l'interrupteur. L'interrupteur **Réseau ouvert**, sous **Réglages > Réseau**, est activé par défaut. [Qui en fait partie](https://linkpearl-sync.github.io/reseau.html#fr).
 
 ---
 

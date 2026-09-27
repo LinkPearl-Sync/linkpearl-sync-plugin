@@ -121,6 +121,9 @@ public sealed class Plugin : IDalamudPlugin
     /// <summary>Les services actifs vus à la ronde précédente, pour retélécharger quand ils changent.</summary>
     private string _lastServices = string.Empty;
 
+    /// <summary>L'interrupteur « Réseau ouvert » au tick précédent, pour relire la liste quand on le rallume.</summary>
+    private bool _lastOpenCircle = true;
+
     /// <summary>Le côté membre de l'admission : défis, validations en attente.</summary>
     private readonly AdmissionHost _admissionHost;
 
@@ -912,6 +915,15 @@ public sealed class Plugin : IDalamudPlugin
                             _lastServices = services;
                             _banFetcher.RefreshSoon();
                         }
+
+                        // Rallumé, le réseau ouvert repart d'une liste fraîche : celle
+                        // gardée depuis le dernier démarrage peut dater de six heures.
+                        var openCircle = _configuration.OpenCircle;
+
+                        if (openCircle && _lastOpenCircle is false)
+                            _consensusFetcher.RefreshSoon();
+
+                        _lastOpenCircle = openCircle;
 
                         // Les joueurs à vérifier : ceux qui ont le plugin, et les
                         // paires du carnet, dont l'apparence se pose sans détection.

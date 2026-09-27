@@ -675,7 +675,7 @@ identifiant_cle = SHA-256(clé publique compressée)[0..8]
 
 Elle vaut sept jours. Le client n'accepte que les clés inscrites dans le plugin
 (`ConsensusKeys`), refuse une version antérieure à celle qu'il détient, et la
-redemande à l'autorité toutes les six heures, par pages :
+redemande à l'autorité chaque heure, et aussitôt quand on rallume le réseau ouvert, par pages :
 
 ```
 ConsensusQuery  0x17 | page (2, BE)

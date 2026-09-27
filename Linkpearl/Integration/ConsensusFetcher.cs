@@ -14,7 +14,9 @@ namespace Linkpearl.Integration;
 /// </remarks>
 public sealed class ConsensusFetcher(OpenCircle circle, string path, IPluginLog log) : IDisposable
 {
-    private static readonly TimeSpan Interval = TimeSpan.FromHours(6);
+    // Une heure : c'est le délai qu'un joueur perçoit après chaque changement
+    // de la liste, et le document tient en quelques centaines d'octets.
+    private static readonly TimeSpan Interval = TimeSpan.FromHours(1);
     private static readonly TimeSpan Patience = TimeSpan.FromSeconds(30);
 
     private readonly CancellationTokenSource _life = new();

@@ -125,7 +125,7 @@ Each rendezvous service in your list can publish a list of banned characters. A 
 
 ## The open network
 
-Once paired, you and your pair also meet through two services run by volunteers, picked from a list signed by the project's authority (rdv.linkpearl.eorzea.events). A service enters it on its own, after 72 hours of answering at least 95% of checks, and never sees a key or a character name: pairing itself, Public and group members you have not met yet stay on the services in your list. If neither of your two services answers within 10 seconds, or no valid list is held, everything goes back to your list. The list is fetched again every six hours. The **Réseau ouvert** (open network) switch, under **Réglages > Réseau** (Settings > Network), is on by default. [Who is in it](https://linkpearl-sync.github.io/reseau.html).
+Once paired, you and your pair also meet through two services run by volunteers, picked from a list signed by the project's authority (rdv.linkpearl.eorzea.events). A service enters it on its own, after 72 hours of answering at least 95% of checks, and never sees a key or a character name: pairing itself, Public and group members you have not met yet stay on the services in your list. If neither of your two services answers within 10 seconds, or no valid list is held, everything goes back to your list. The list is fetched again every hour, and right away when you turn the switch back on. The **Réseau ouvert** (open network) switch, under **Réglages > Réseau** (Settings > Network), is on by default. [Who is in it](https://linkpearl-sync.github.io/reseau.html).
 
 ---
 
