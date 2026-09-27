@@ -507,6 +507,71 @@ public sealed class SyncEngineTests : IDisposable
     }
 
     [Fact]
+    public async Task Une_pause_se_dit_et_la_reprise_l_efface()
+    {
+        await using var world = await TwoEnginesAsync();
+
+        IReadOnlyList<VisiblePlayer> sees = [new VisiblePlayer(new GameObjectRef(4, 100), AlicePrint)];
+
+        Assert.True(
+            await world.SettleAsync(() => world.BobApplicator.Applied.Count > 0, [], sees),
+            "l'apparence n'a jamais été posée : " + world.Describe());
+
+        var saved = 0;
+        world.Bob.BookChanged += () => saved++;
+
+        world.AliceBook.SetPaused(world.BobId, true);
+
+        Assert.True(
+            await world.SettleAsync(() => world.BobStatus().Phase is PeerPhase.PausedByPeer, [], sees),
+            "la pause n'a jamais été dite : " + world.Describe());
+
+        Assert.True(world.BobBook.Find(world.AliceId)!.PausedByPeer);
+        Assert.True(saved > 0, "le carnet marqué n'a pas été donné à enregistrer");
+
+        world.AliceBook.SetPaused(world.BobId, false);
+
+        Assert.True(
+            await world.SettleAsync(() => world.BobBook.Find(world.AliceId)!.PausedByPeer is false, [], sees),
+            "la reprise n'a pas effacé la marque : " + world.Describe());
+
+        Assert.NotEqual(PeerPhase.PausedByPeer, world.BobStatus().Phase);
+    }
+
+    [Fact]
+    public async Task Sans_session_ouverte_la_pause_ne_dit_rien()
+    {
+        // Alice met Bob en pause avant qu'ils ne se soient jamais joints : rien
+        // ne doit l'obliger à le chercher pour le lui dire.
+        await using var world = await TwoEnginesAsync();
+
+        world.AliceBook.SetPaused(world.BobId, true);
+
+        for (var i = 0; i < 40; i++)
+            await world.TickAsync([], []);
+
+        Assert.False(world.BobBook.Find(world.AliceId)!.PausedByPeer);
+    }
+
+    [Fact]
+    public async Task Un_blocage_ne_se_dit_pas()
+    {
+        await using var world = await TwoEnginesAsync();
+
+        IReadOnlyList<VisiblePlayer> sees = [new VisiblePlayer(new GameObjectRef(4, 100), AlicePrint)];
+
+        Assert.True(
+            await world.SettleAsync(() => world.BobApplicator.Applied.Count > 0, [], sees),
+            "l'apparence n'a jamais été posée : " + world.Describe());
+
+        world.AliceBook.Block(world.BobId);
+
+        for (var i = 0; i < 40; i++)
+            await world.TickAsync([], sees);
+
+        Assert.False(world.BobBook.Find(world.AliceId)!.PausedByPeer);
+    }
+    [Fact]
     public async Task Une_session_qui_tombe_se_rejoint_sans_attendre()
     {
         // Mettre en pause puis reprendre : l'autre côté voit tomber la session

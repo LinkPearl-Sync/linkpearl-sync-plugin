@@ -42,4 +42,14 @@ public static class MessageKind
     /// l'est davantage. Un client qui ne le connaît pas l'ignore.
     /// </remarks>
     public const byte GroupPolicy = 0x10;
+
+    /// <summary>
+    /// L'expéditeur vient de nous mettre en pause, et ferme la session.
+    /// </summary>
+    /// <remarks>
+    /// Sans charge utile, comme <see cref="Unpair"/>. Envoyé seulement sur une
+    /// session déjà ouverte : une pause ne fait jamais chercher le pair pour la
+    /// lui dire. Un client qui ne le connaît pas l'ignore.
+    /// </remarks>
+    public const byte Pause = 0x11;
 }

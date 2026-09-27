@@ -238,6 +238,10 @@ public sealed class SyncEngine : IAsyncDisposable
     /// <summary>Un pair retiré a reçu l'avis, et son entrée a quitté le carnet.</summary>
     public event Action<PairRecord>? RevocationDelivered;
 
+    /// <summary>Le moteur a changé le carnet de lui-même : l'hôte l'enregistre.</summary>
+    /// <remarks>Levé depuis le tic, sur le fil du moteur, comme <see cref="PairEnded"/>.</remarks>
+    public event Action? BookChanged;
+
     public IReadOnlyList<PeerStatus> Statuses =>
         _runtimes.Where(entry => entry.Value.Revoked is false).Select(entry => new PeerStatus(
             entry.Key,
@@ -252,7 +256,7 @@ public sealed class SyncEngine : IAsyncDisposable
             entry.Value.Pair.Group?.Group,
             PeerPhases.Of(
                 entry.Value.Dial is not null, entry.Value.Session is not null, _clock.UtcNow,
-                entry.Value.NextAttempt, entry.Value.LastFailure, entry.Value.WasAbsent, false,
+                entry.Value.NextAttempt, entry.Value.LastFailure, entry.Value.WasAbsent, entry.Value.Pair.PausedByPeer,
                 entry.Value.Exchange?.View ?? EmptyView, entry.Value.AppliedOn is not null)))
         .ToList();
 
@@ -277,6 +281,7 @@ public sealed class SyncEngine : IAsyncDisposable
         try
         {
             await ReconcileBookAsync(ct).ConfigureAwait(false);
+            FollowPauses();
             await FollowEndingsAsync(ct).ConfigureAwait(false);
             await GiveUpUnansweredNoticesAsync(ct).ConfigureAwait(false);
             await ServeReapplyAsync(ct).ConfigureAwait(false);
@@ -475,6 +480,12 @@ public sealed class SyncEngine : IAsyncDisposable
             // de la mise en pause un bouton sans effet visible. Un pair retiré
             // revient au tour suivant, sous une session qui ne sert qu'à le
             // prévenir : celle-ci portait une apparence, qui doit cesser.
+            // Mis en pause pendant une session : le dire avant de raccrocher,
+            // sans quoi l'autre nous croit parti du jeu. Pas un blocage, qui ne
+            // doit rien révéler, et jamais en cherchant le pair exprès.
+            if (runtime.Session is { } open && _book.Find(id) is { Paused: true, Trust: PairTrust.Accepted })
+                await SendPauseAsync(runtime, open, ct).ConfigureAwait(false);
+
             _log.Info($"{runtime.Pair.DisplayName} : pair retiré des actifs, session fermée.");
             await TearDownAsync(id, runtime, ct).ConfigureAwait(false);
             _runtimes.Remove(id);
@@ -488,6 +499,23 @@ public sealed class SyncEngine : IAsyncDisposable
             // Joignable tout de suite : une reprise de plugin ne doit pas coûter
             // une attente à l'utilisateur.
             _runtimes[id] = new Runtime { Pair = pair, NextAttempt = _clock.UtcNow };
+        }
+    }
+
+    /// <summary>Reporte au carnet les avis de pause reçus depuis le tic précédent.</summary>
+    private void FollowPauses()
+    {
+        foreach (var (id, runtime) in _runtimes)
+        {
+            if (runtime.PausedByPeerNotice is false)
+                continue;
+
+            runtime.PausedByPeerNotice = false;
+            _book.SetPausedByPeer(id, true);
+            runtime.Pair = _book.Find(id) ?? runtime.Pair;
+
+            _log.Info($"{runtime.Pair.DisplayName} : nous a mis en pause.");
+            BookChanged?.Invoke();
         }
     }
 
@@ -609,6 +637,15 @@ public sealed class SyncEngine : IAsyncDisposable
 
         _book.Seen(id);
 
+        // Une session rouverte, c'est la reprise vue d'ici : la pause qu'il
+        // nous avait dite est finie.
+        if (runtime.Pair.PausedByPeer)
+        {
+            _book.SetPausedByPeer(id, false);
+            runtime.Pair = _book.Find(id) ?? runtime.Pair;
+            BookChanged?.Invoke();
+        }
+
         try
         {
             await exchange.HelloAsync(ct).ConfigureAwait(false);
@@ -691,6 +728,33 @@ public sealed class SyncEngine : IAsyncDisposable
         catch (Exception e)
         {
             _log.Warning($"{runtime.Pair.DisplayName} : avis de retrait non envoyé.", e);
+        }
+    }
+
+    /// <summary>
+    /// Dit au pair qu'on le met en pause, puis laisse partir la trame.
+    /// </summary>
+    /// <remarks>
+    /// La fermeture suit aussitôt, et LiteNetLib peut jeter une trame fiable
+    /// encore en file quand la connexion tombe : on attend que le canal de
+    /// contrôle se vide, une seconde au plus. Au mieux : perdu, l'avis laisse
+    /// l'autre nous voir absent, comme avant qu'il existe.
+    /// </remarks>
+    private async Task SendPauseAsync(Runtime runtime, PeerSession session, CancellationToken ct)
+    {
+        try
+        {
+            await session.SendAsync(ChannelPlan.ControlChannel, MessageKind.Pause, ReadOnlyMemory<byte>.Empty, ct)
+                .ConfigureAwait(false);
+
+            for (var waited = 0; waited < 20 && session.Link.PendingOn(ChannelPlan.ControlChannel) > 0; waited++)
+                await Task.Delay(50, ct).ConfigureAwait(false);
+
+            _log.Info($"{runtime.Pair.DisplayName} : avis de pause envoyé.");
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            _log.Warning($"{runtime.Pair.DisplayName} : avis de pause non envoyé.", e);
         }
     }
 
@@ -1017,6 +1081,17 @@ public sealed class SyncEngine : IAsyncDisposable
                     continue;
                 }
 
+                // Ramassé au tic suivant, comme l'avis de retrait. Ignoré d'un
+                // membre de groupe : on ne met pas en pause un membre, on le
+                // bloque, et un blocage ne se dit pas.
+                if (message.Kind == MessageKind.Pause)
+                {
+                    if (runtime.Pair.Group is null)
+                        runtime.PausedByPeerNotice = true;
+
+                    continue;
+                }
+
                 // Ramassé au tic suivant, comme l'avis de retrait : c'est le tic
                 // qui touche au carnet de groupes, pas ce fil-ci.
                 if (message.Kind == MessageKind.GroupPolicy)
@@ -1219,6 +1294,9 @@ public sealed class SyncEngine : IAsyncDisposable
 
         /// <summary>Écrit par la pompe de la session, lu par le tic.</summary>
         public volatile bool EndedByPeer;
+
+        /// <summary>Un avis de pause est arrivé, que le tic suivant reporte au carnet.</summary>
+        public volatile bool PausedByPeerNotice;
 
         /// <summary>
         /// Ce qu'on accepte de ce pair, global et pair confondus.

@@ -93,6 +93,16 @@ public sealed record PairRecord
     public ConnectionPolicy Policy { get; init; } = ConnectionPolicy.Direct;
     public bool Paused { get; init; }
 
+    /// <summary>
+    /// Ce pair nous a mis en pause, et aucune session ne s'est rouverte depuis.
+    /// </summary>
+    /// <remarks>
+    /// Sans elle, sa pause se lirait comme un départ du jeu. Enregistrée pour
+    /// survivre à un rechargement ; la reprise se voit à la session suivante,
+    /// qui l'efface.
+    /// </remarks>
+    public bool PausedByPeer { get; init; }
+
     /// <summary>Les animations, VFX et sons qu'on accepte de ce pair.</summary>
     /// <remarks>
     /// Tout par défaut : c'est ce qui rend une idle ou une pose assise visibles
@@ -203,6 +213,9 @@ public sealed class PairBook(IClock clock)
     public void Block(PeerId id) => Update(id, record => record with { Trust = PairTrust.Blocked });
 
     public void SetPaused(PeerId id, bool paused) => Update(id, record => record with { Paused = paused });
+
+    public void SetPausedByPeer(PeerId id, bool paused)
+        => Update(id, record => record with { PausedByPeer = paused });
 
     public void SetPolicy(PeerId id, ConnectionPolicy policy) => Update(id, record => record with { Policy = policy });
 
