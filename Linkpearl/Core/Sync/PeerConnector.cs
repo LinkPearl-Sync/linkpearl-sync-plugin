@@ -25,6 +25,16 @@ public interface IRendezvousDialer
 /// <summary>Ce qu'une tentative de connexion a donné, et par quel lieu elle est passée.</summary>
 public sealed record ConnectionAttempt(IPeerLink? Link, bool PeerWasAbsent, string? Failure, RendezvousAddress? Via = null);
 
+/// <summary>Ce qu'a donné une demande de relais : un lien, ou un refus explicite.</summary>
+/// <remarks>Un silence n'est pas un refus : le pair a pu se replier ailleurs avant nous.</remarks>
+public sealed record RelayOpening(IPeerLink? Link, bool Refused);
+
+/// <summary>Ouvre un relais sur un service, dans un budget donné.</summary>
+public interface IRelayOpener
+{
+    Task<RelayOpening> OpenAsync(RelayPlace place, byte[] ticket, TimeSpan budget, CancellationToken ct);
+}
+
 /// <summary>
 /// Enchaîne ce qu'il faut pour joindre un pair : réflexion, annonce, perçage, relais.
 /// </summary>
@@ -36,7 +46,8 @@ public sealed record ConnectionAttempt(IPeerLink? Link, bool PeerWasAbsent, stri
 /// </remarks>
 public sealed class PeerConnector(
     PeerLinkFactory links, RendezvousEndpoint rendezvous, IClock clock, ILogSink log,
-    TimeSpan? announceBudget = null, IOpenCircle? circle = null, Func<IPAddress, bool>? acceptOpenAddress = null) : IPeerDialer
+    TimeSpan? announceBudget = null, IOpenCircle? circle = null, Func<IPAddress, bool>? acceptOpenAddress = null,
+    RelayLatencies? latencies = null) : IPeerDialer, IRelayOpener
 {
     /// <summary>
     /// L'adresse à joindre pour un nom du cercle ouvert, ou null s'il ne mène qu'au réseau local.
@@ -99,7 +110,54 @@ public sealed class PeerConnector(
     /// Sous les trente secondes que le service accorde, pour que ce soit nous
     /// qui abandonnions et non lui qui nous coupe sans rien dire.
     /// </remarks>
-    private static readonly TimeSpan RelayBudget = TimeSpan.FromSeconds(20);
+    public static readonly TimeSpan RelayBudget = TimeSpan.FromSeconds(20);
+
+    /// <summary>Attente au relais choisi, quand ce n'est pas le service d'appariement.</summary>
+    /// <remarks>
+    /// Courte : le service garde une demande trente secondes, et celui des deux
+    /// pairs qui échoue vite attend déjà l'autre au service d'appariement.
+    /// </remarks>
+    public static readonly TimeSpan ChosenRelayBudget = TimeSpan.FromSeconds(8);
+
+    /// <summary>Attente au service d'appariement après l'échec du relais choisi.</summary>
+    public static readonly TimeSpan FallbackRelayBudget = TimeSpan.FromSeconds(25);
+
+    /// <summary>
+    /// Relaie par le service choisi, et à défaut par celui qui a apparié.
+    /// </summary>
+    /// <remarks>
+    /// Les deux côtés ont décidé le même service ; s'il échoue pour l'un, il
+    /// échoue d'ordinaire pour l'autre, et les deux se retrouvent au service
+    /// d'appariement, que tous deux ont déjà atteint.
+    /// </remarks>
+    public static async Task<(IPeerLink? Link, RendezvousAddress Via)> RelayWithFallbackAsync(
+        IRelayOpener opener, RelayPlace chosen, RelayPlace matched, byte[] ticket, ILogSink log,
+        Action<RendezvousAddress>? refused, CancellationToken ct)
+    {
+        if (chosen.Fingerprint == matched.Fingerprint)
+            return Opened((await opener.OpenAsync(matched, ticket, RelayBudget, ct).ConfigureAwait(false)).Link, matched.At, log);
+
+        var first = await opener.OpenAsync(chosen, ticket, ChosenRelayBudget, ct).ConfigureAwait(false);
+
+        if (first.Link is not null)
+            return Opened(first.Link, chosen.At, log);
+
+        if (first.Refused)
+            refused?.Invoke(chosen.At);
+
+        log.Info($"Relais choisi {ServiceConsensus.Canonical(chosen.At)} {(first.Refused ? "refusé" : "sans réponse")}, "
+                 + $"repli sur {ServiceConsensus.Canonical(matched.At)}.");
+
+        return Opened((await opener.OpenAsync(matched, ticket, FallbackRelayBudget, ct).ConfigureAwait(false)).Link, matched.At, log);
+    }
+
+    private static (IPeerLink? Link, RendezvousAddress Via) Opened(IPeerLink? link, RendezvousAddress via, ILogSink log)
+    {
+        if (link is not null)
+            log.Info($"Relais ouvert par {ServiceConsensus.Canonical(via)}.");
+
+        return (link, via);
+    }
 
     /// <summary>
     /// Le jeton qu'un pair doit présenter pour ouvrir une session avec nous.
@@ -240,7 +298,16 @@ public sealed class PeerConnector(
             ? []
             : await GatherCandidatesAsync(ct).ConfigureAwait(false);
 
-        var sealedCandidates = SealCandidates(pair.PairSecret, candidates);
+        // Les services où l'on pourrait relayer, et ce qu'on en mesure. Un pair
+        // en relais seul ne livre que sa région : ses RTT vers plusieurs
+        // continents laisseraient trianguler l'adresse que ce mode protège.
+        var eligible = RelayPlacement.Eligible(pair.PairSecret, circle?.RelayEntriesFor(pair) ?? [], pair.Rendezvous);
+        var measured = latencies?.MeasurementsFor(eligible);
+
+        if (measured is not null && relayOnly)
+            measured = RelayMeasurements.Synthetic(eligible, measured);
+
+        var sealedCandidates = SealCandidates(pair.PairSecret, candidates, measured);
 
         var announcement = new Announcement(
             new RendezvousTicket(clock).Announce(pair.PairSecret), sealedCandidates);
@@ -270,8 +337,13 @@ public sealed class PeerConnector(
             return new ConnectionAttempt(
                 null, false, "bloc de candidats illisible : secret de paire différent, ou pair à mettre à jour ?");
 
-        if (CandidateSet.TryDecode(plain, out var theirCandidates, out var why) is false)
+        if (CandidateSet.TryDecode(plain, out var theirCandidates, out var consumed, out var why) is false)
             return new ConnectionAttempt(null, false, $"candidats refusés : {why}");
+
+        // Un pair d'avant les mesures n'a rien après ses adresses, et une
+        // extension illisible vaut pour absente : dans les deux cas, on relaie
+        // par le service d'appariement comme avant.
+        var theirMeasures = RelayMeasurements.TryRead(plain.AsSpan(consumed));
 
         var ordered = CandidateSet.InPriorityOrder(theirCandidates);
 
@@ -298,11 +370,25 @@ public sealed class PeerConnector(
         }
 
         var ticket = RelayTicketFor(pair.PairSecret, sealedCandidates, match.Value.Theirs);
-        var relayed = await OpenRelayAsync(match.Value.At, ticket, ct).ConfigureAwait(false);
+
+        // Le relais ne sort jamais de nos éligibles : une empreinte que nous ne
+        // connaissons pas ne peut venir que d'un pair qui ment, et l'on reste
+        // alors au service d'appariement.
+        var matchedPlace = eligible.FirstOrDefault(place => place.Fingerprint == RelayPlace.FingerprintOf(match.Value.At))
+            ?? new RelayPlace(match.Value.At, null, viaOpen);
+        var decision = RelayChoice.Decide(measured, theirMeasures, matchedPlace.Fingerprint);
+        var chosenPlace = eligible.FirstOrDefault(place => place.Fingerprint == decision.Service) ?? matchedPlace;
+
+        if (chosenPlace.Fingerprint != matchedPlace.Fingerprint)
+            log.Info($"{pair.DisplayName} : relais par {ServiceConsensus.Canonical(chosenPlace.At)} ({decision.WorstMs} ms"
+                     + (decision.MatchedWorstMs is { } before ? $" contre {before} ms au service d'appariement)." : ")."));
+
+        var (relayed, via) = await RelayWithFallbackAsync(
+            this, chosenPlace, matchedPlace, ticket, log, latencies is null ? null : latencies.MarkRefused, ct).ConfigureAwait(false);
 
         return relayed is null
             ? new ConnectionAttempt(null, false, "ni perçage ni relais : le service refuse peut-être de relayer")
-            : new ConnectionAttempt(relayed, false, null, Via: match.Value.At);
+            : new ConnectionAttempt(relayed, false, null, Via: via);
     }
 
     /// <summary>
@@ -330,23 +416,30 @@ public sealed class PeerConnector(
     }
 
     /// <summary>
-    /// Ouvre le relais sur le lieu qui a apparié, le seul que les deux ont atteint.
+    /// Ouvre le relais sur un service, le choisi ou celui qui a apparié.
     /// </summary>
     /// <remarks>
     /// Le service garde la première demande en attente jusqu'à trente
     /// secondes ; les deux côtés arrivent ici à quelques secondes d'écart,
     /// après le même budget de perçage.
     /// </remarks>
-    private async Task<IPeerLink?> OpenRelayAsync(RendezvousAddress at, byte[] ticket, CancellationToken ct)
+    public async Task<RelayOpening> OpenAsync(RelayPlace place, byte[] ticket, TimeSpan budget, CancellationToken ct)
     {
         var client = new RendezvousClient();
 
         try
         {
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            deadline.CancelAfter(RelayBudget);
+            deadline.CancelAfter(budget);
 
-            await client.ConnectAsync(at.Host, at.Port, deadline.Token).ConfigureAwait(false);
+            // Un service du cercle ouvert ne se joint qu'à une adresse publique,
+            // comme pour l'annonce ; l'ancrage garde la confiance qu'il a toujours eue.
+            var host = place.Open
+                ? await PublicHostAsync(place.At.Host, Dns.GetHostAddressesAsync, acceptOpenAddress ?? ServiceConsensus.IsPublicAddress, deadline.Token).ConfigureAwait(false)
+                    ?? throw new IOException($"{place.At.Host} ne mène à aucune adresse publique")
+                : place.At.Host;
+
+            await client.ConnectAsync(host, place.At.Port, deadline.Token).ConfigureAwait(false);
 
             // Les deux côtés arrivent ici après le même budget de perçage. Un
             // service d'avant le 24 septembre 2026 garait alors les deux
@@ -355,17 +448,19 @@ public sealed class PeerConnector(
             await Task.Delay(Random.Shared.Next(0, 400), deadline.Token).ConfigureAwait(false);
 
             if (await client.OpenRelayAsync(ticket, deadline.Token).ConfigureAwait(false))
-                return new RelayPeerLink(new RendezvousRelayPipe(client), new DnsEndPoint(at.Host, at.Port));
+                return new RelayOpening(new RelayPeerLink(new RendezvousRelayPipe(client), new DnsEndPoint(place.At.Host, place.At.Port)), false);
 
-            log.Info($"Relais refusé par {at.Host}.");
+            log.Info($"Relais refusé par {place.At.Host}.");
+            await client.DisposeAsync().ConfigureAwait(false);
+            return new RelayOpening(null, true);
         }
         catch (Exception e) when (e is OperationCanceledException or IOException or System.Net.Sockets.SocketException)
         {
-            log.Info($"Relais par {at.Host} sans réponse : {e.Message}");
+            log.Info($"Relais par {place.At.Host} sans réponse : {e.Message}");
         }
 
         await client.DisposeAsync().ConfigureAwait(false);
-        return null;
+        return new RelayOpening(null, false);
     }
 
     /// <summary>Nos adresses : celle que le rendez-vous voit, et nos adresses locales.</summary>
@@ -442,11 +537,15 @@ public sealed class PeerConnector(
     /// avec le format, pour que la clé dont la version 1 a pu laisser fuir de
     /// quoi forger ne serve plus.
     /// </remarks>
-    public static byte[] SealCandidates(ReadOnlySpan<byte> pairSecret, IReadOnlyList<IPEndPoint> candidates)
+    public static byte[] SealCandidates(
+        ReadOnlySpan<byte> pairSecret, IReadOnlyList<IPEndPoint> candidates, IReadOnlyList<RelayMeasurement>? measurements = null)
     {
+        byte[] plain = measurements is null
+            ? CandidateSet.Encode(candidates)
+            : [.. CandidateSet.Encode(candidates), .. RelayMeasurements.Encode(measurements)];
+
         var nonce = RandomNumberGenerator.GetBytes(CryptoPrimitives.NonceLength);
-        var sealedBody = CryptoPrimitives.Seal(
-            CandidateKey(pairSecret), nonce, CandidateSet.Encode(candidates), CandidateKeyInfo);
+        var sealedBody = CryptoPrimitives.Seal(CandidateKey(pairSecret), nonce, plain, CandidateKeyInfo);
 
         return [.. nonce, .. sealedBody];
     }

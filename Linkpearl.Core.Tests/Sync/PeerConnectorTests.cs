@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Linkpearl.Core.Sync;
 using Linkpearl.Core.Transport.Rendezvous;
 using Xunit;
@@ -49,6 +50,25 @@ internal sealed class TimedDialer(Dictionary<string, byte[]?> answers, HashSet<s
         }
 
         return answer;
+    }
+}
+
+/// <summary>Un ouvreur de relais scripté : chaque service accepte, refuse ou se tait.</summary>
+/// <remarks>Le lien rendu est le faux lien en mémoire du moteur, dont seule la présence compte ici.</remarks>
+internal sealed class ScriptedRelays(Dictionary<string, string> behaviour) : IRelayOpener
+{
+    public List<(string Host, TimeSpan Budget)> Opened { get; } = [];
+
+    public Task<RelayOpening> OpenAsync(RelayPlace place, byte[] ticket, TimeSpan budget, CancellationToken ct)
+    {
+        Opened.Add((place.At.Host, budget));
+
+        return Task.FromResult(behaviour.GetValueOrDefault(place.At.Host) switch
+        {
+            "accepte" => new RelayOpening(MemoryLink.Pair().A, false),
+            "refuse" => new RelayOpening(null, true),
+            _ => new RelayOpening(null, false),
+        });
     }
 }
 
@@ -220,6 +240,84 @@ public class PeerConnectorTests
             Some(), TimeSpan.FromSeconds(5), default);
 
         Assert.Equal("bon.ch", result!.Value.At.Host);
+    }
+
+    private static RelayPlace Relay(string host) => new(new RendezvousAddress(host, 47900), null, true);
+
+    [Fact]
+    public async Task Le_relais_choisi_sert_quand_il_accepte()
+    {
+        var relays = new ScriptedRelays(new() { ["proche.us"] = "accepte" });
+
+        var (link, via) = await PeerConnector.RelayWithFallbackAsync(
+            relays, Relay("proche.us"), Relay("suisse.ch"), new byte[16], new SilentLog(), null, CancellationToken.None);
+
+        Assert.NotNull(link);
+        Assert.Equal("proche.us", via.Host);
+        Assert.Equal([("proche.us", PeerConnector.ChosenRelayBudget)], relays.Opened);
+    }
+
+    [Fact]
+    public async Task Un_refus_se_replie_sur_le_service_d_appariement_et_se_retient()
+    {
+        var relays = new ScriptedRelays(new() { ["proche.us"] = "refuse", ["suisse.ch"] = "accepte" });
+        var refused = new List<RendezvousAddress>();
+
+        var (link, via) = await PeerConnector.RelayWithFallbackAsync(
+            relays, Relay("proche.us"), Relay("suisse.ch"), new byte[16], new SilentLog(), refused.Add, CancellationToken.None);
+
+        Assert.NotNull(link);
+        Assert.Equal("suisse.ch", via.Host);
+        Assert.Equal([("proche.us", PeerConnector.ChosenRelayBudget), ("suisse.ch", PeerConnector.FallbackRelayBudget)], relays.Opened);
+        Assert.Equal("proche.us", Assert.Single(refused).Host);
+    }
+
+    [Fact]
+    public async Task Un_silence_se_replie_sans_retenir_de_refus()
+    {
+        var relays = new ScriptedRelays(new() { ["suisse.ch"] = "accepte" });
+        var refused = new List<RendezvousAddress>();
+
+        var (link, _) = await PeerConnector.RelayWithFallbackAsync(
+            relays, Relay("proche.us"), Relay("suisse.ch"), new byte[16], new SilentLog(), refused.Add, CancellationToken.None);
+
+        Assert.NotNull(link);
+        Assert.Empty(refused);
+    }
+
+    [Fact]
+    public async Task Quand_le_choix_est_le_service_d_appariement_un_seul_essai_suffit()
+    {
+        var relays = new ScriptedRelays(new() { ["suisse.ch"] = "accepte" });
+
+        await PeerConnector.RelayWithFallbackAsync(
+            relays, Relay("suisse.ch"), Relay("suisse.ch"), new byte[16], new SilentLog(), null, CancellationToken.None);
+
+        Assert.Equal([("suisse.ch", PeerConnector.RelayBudget)], relays.Opened);
+    }
+
+    [Fact]
+    public void Les_budgets_tiennent_dans_l_attente_du_service()
+    {
+        // Un côté qui échoue aussitôt attend au service d'appariement ; l'autre
+        // l'y rejoint au bout du budget du relais choisi. Il faut que ce soit
+        // avant que le service ne lâche la première demande.
+        Assert.True(PeerConnector.ChosenRelayBudget < PeerConnector.FallbackRelayBudget);
+        Assert.True(PeerConnector.FallbackRelayBudget < TimeSpan.FromSeconds(30));
+        Assert.True(PeerConnector.ChosenRelayBudget + TimeSpan.FromSeconds(1) < TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public void Les_mesures_scellees_se_relisent()
+    {
+        var secret = RandomNumberGenerator.GetBytes(32);
+        RelayMeasurement[] measures = [new(7, 12)];
+
+        var sealedBlock = PeerConnector.SealCandidates(secret, [], measures);
+
+        Assert.True(PeerConnector.TryOpenCandidates(secret, sealedBlock, out var plain));
+        Assert.True(CandidateSet.TryDecode(plain, out _, out var consumed, out _));
+        Assert.Equal(measures, RelayMeasurements.TryRead(plain.AsSpan(consumed)));
     }
 
     private sealed class ThrowingDialer : IRendezvousDialer
