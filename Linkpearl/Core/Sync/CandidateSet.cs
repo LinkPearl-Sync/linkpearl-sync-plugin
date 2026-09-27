@@ -34,8 +34,17 @@ public static class CandidateSet
     }
 
     public static bool TryDecode(ReadOnlySpan<byte> body, out List<IPEndPoint> candidates, out string? rejection)
+        => TryDecode(body, out candidates, out _, out rejection);
+
+    /// <summary>Comme l'autre, et rend le nombre d'octets lus.</summary>
+    /// <remarks>
+    /// Ce qui suit les adresses est laissé aux extensions : un décodeur d'avant
+    /// ne le lisait pas, ce qui permet d'y ajouter sans casser personne.
+    /// </remarks>
+    public static bool TryDecode(ReadOnlySpan<byte> body, out List<IPEndPoint> candidates, out int consumed, out string? rejection)
     {
         candidates = [];
+        consumed = 0;
 
         if (body.Length < 1)
         {
@@ -84,6 +93,7 @@ public static class CandidateSet
             candidates.Add(new IPEndPoint(address, port));
         }
 
+        consumed = offset;
         rejection = null;
         return true;
     }
