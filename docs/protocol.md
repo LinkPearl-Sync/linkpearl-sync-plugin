@@ -703,7 +703,8 @@ dans le temps : la place dépend du secret, qu'un attaquant ignore.
 
 **Annonce.** Le client s'annonce sur ses deux services ouverts tout de suite, et
 sur l'ancrage dix secondes plus tard, ou dès que les deux services ouverts ont
-échoué. Le premier appariement gagne et désigne le relais. Sans liste valable,
+échoué. Le premier appariement gagne et désigne le relais par défaut (voir
+« Choix du relais »). Sans liste valable,
 tout passe par l'ancrage comme avant.
 
 ## Rendez-vous et connexion
@@ -751,6 +752,74 @@ jeton_relais = HMAC-SHA256(secret, "linkpearl:relay:v1" || min(blocA, blocB) || 
 
 Le service met les deux connexions TCP bout à bout et recopie les trames sans
 les lire. Le jeton change à chaque tentative, puisque les blocs portent un aléa.
+
+### Choix du relais
+
+Fichiers : `Core/Sync/RelayPlacement.cs`, `Core/Sync/RelayMeasurements.cs`,
+`Core/Sync/RelayChoice.cs`, `Core/Sync/RelayLatencies.cs`, `Core/Sync/RelayPing.cs`.
+
+Le relais ne passe plus forcément par le service qui a apparié. Chaque pair
+glisse, à la fin de son bloc de candidats scellé, ses RTT vers les services
+où la paire a le droit de relayer : les deux du placement, le meilleur score
+de chaque région qui compte au moins deux familles, et l'ancrage.
+
+```
+extension = etiquette(1) || longueur(2, BE) || contenu
+0x01      : nombre(1) || (service(8) || rtt_ms(2, BE))*        nombre ≤ 16
+service   = SHA-256(adresse canonique)[0..8]
+```
+
+`0xFFFF` veut dire injoignable, et un RTT mesuré plafonne à `0xFFFE`. Un pair
+en relais seul envoie `0` pour sa région la plus proche, `1000` pour les autres
+services joignables, `0xFFFF` pour les injoignables, jamais de vrai RTT : des
+RTT vers plusieurs continents laisseraient trianguler l'adresse que ce mode
+cache. Un client d'avant s'arrête à ses adresses et ignore l'extension ; une
+extension illisible vaut pour absente.
+
+Les RTT se mesurent en tâche de fond, par la réflexion UDP que tout service
+sert déjà : trois essais d'une seconde, le minimum retenu, une mesure fraîche
+trente minutes, au plus 64 services par cycle.
+
+Les deux côtés retiennent, parmi les services mesurés des deux, celui qui
+minimise `max(rttA, rttB)`, puis `rttA + rttB`, puis l'empreinte. Le service
+d'appariement n'est quitté que pour un gain d'au moins 20 ms **et** 20 %. Les
+deux voient les mêmes mesures, donc arrivent au même service sans échange de
+plus. Un pair sans mesures (client d'avant) garde le service d'appariement.
+
+Quand le choix est le service d'appariement, le relais y reçoit 20 secondes
+comme avant. Sinon, le relais choisi reçoit 8 secondes ; à défaut, le service
+d'appariement 25. Seul un refus explicite, la trame d'erreur « relais coupé
+sur ce service » d'un service qui a désactivé le relais, est retenu 24 heures :
+nos mesures le déclarent alors injoignable (`0xFFFF`), et il n'est plus retenu. Une fin de flux, la limite
+« trop de demandes de relais » ou toute autre erreur valent pour un silence :
+repli sur le service d'appariement, rien de retenu.
+
+La région d'un service vient de l'autorité, qui la déduit de son adresse par
+GeoIP (une base de plus de 90 jours ne donne plus de région), dans une liste
+signée v2 servie à côté de la v1 :
+
+```
+liste_v2  = "linkpearl:consensus:v2" || version(4) || emise(8) || expire(8) || nombre(2) || entree_v2*
+entree_v2 = longueur(1) || adresse || longueur(1) || libelle || famille(8) || region(2)
+
+ConsensusV2Query  0x1B | page (2, BE)
+ConsensusV2Page   0x1C | page (2, BE) | pages (2, BE) | tranche du document (≤ 32 Kio)
+```
+
+`region` vaut deux lettres ASCII majuscules (`AF`, `AS`, `EU`, `NA`, `OC`,
+`SA`), ou `00 00` si l'autorité l'ignore. Le préfixe fait partie des octets
+signés : une signature de la v2 ne vaut jamais pour la v1, ni l'inverse. Le
+client demande la v2 avec la moitié de sa patience, et redemande la v1 si la v2
+manque, échoue ou est refusée ; une v1 donne les mêmes services, sans région,
+donc sans tirage régional. La v1 et `ConsensusQuery` restent identiques : les
+clients déjà publiés ne voient rien changer.
+
+Le hasard du secret de paire décide qui est éligible, la latence ne fait que
+départager : choisir librement le plus proche de toute la liste laisserait un
+opérateur qui pose des serveurs partout aspirer les relais de régions entières.
+Le service relayant ne lit toujours rien de ce qu'il recopie, mais il voit,
+comme le service d'appariement avant lui, les adresses des deux pairs et le
+volume échangé.
 
 ## Handshake, SIGMA-I
 

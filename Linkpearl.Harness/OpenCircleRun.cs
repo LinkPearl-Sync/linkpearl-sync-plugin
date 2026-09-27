@@ -18,15 +18,32 @@ internal sealed class CountingLog(string who) : ILogSink
 {
     private readonly ConsoleLog _inner = new(who);
     private int _open;
+    private readonly List<string> _relays = [];
 
     public int OpenMatches => Volatile.Read(ref _open);
+
+    /// <summary>Les services par lesquels un relais s'est ouvert, en « hôte:port ».</summary>
+    public IReadOnlyList<string> Relays
+    {
+        get
+        {
+            lock (_relays)
+                return [.. _relays];
+        }
+    }
 
     public void Debug(string message) => _inner.Debug(message);
 
     public void Info(string message)
     {
-        if (message.Contains("(cercle ouvert)", StringComparison.Ordinal))
+        if (message.Contains("(réseau ouvert)", StringComparison.Ordinal))
             Interlocked.Increment(ref _open);
+
+        const string opened = "Relais ouvert par ";
+
+        if (message.StartsWith(opened, StringComparison.Ordinal))
+            lock (_relays)
+                _relays.Add(message[opened.Length..].TrimEnd('.'));
 
         _inner.Info(message);
     }
@@ -68,6 +85,10 @@ public static class OpenCircleRun
             "repli sur l'ancrage",
             Sign(key, [new RendezvousAddress("127.0.0.1", 47998), new RendezvousAddress("127.0.0.1", 47997)]),
             key, settings, expectOpen: false, ct).ConfigureAwait(false);
+
+        ok &= await ScenarioAsync(
+            "relais le plus proche", SignWithRegions(key, settings.Open), key, settings, expectOpen: true, ct,
+            nearestRelay: settings.Open[0]).ConfigureAwait(false);
 
         Console.WriteLine();
         Console.WriteLine(ok ? "TOUT EST PASSÉ" : "ÉCHEC : voir ci-dessus.");
@@ -122,8 +143,26 @@ public static class OpenCircleRun
             new ServiceConsensus(1, issued, issued + (long)ServiceConsensus.Lifetime.TotalSeconds, entries), key);
     }
 
+    /// <summary>
+    /// Une liste v2 : les deux premiers services en Europe, le troisième en
+    /// Amérique. L'Europe compte deux familles, donc un tirage régional.
+    /// </summary>
+    private static byte[] SignWithRegions(ECDsa key, IReadOnlyList<RendezvousAddress> services)
+    {
+        var issued = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        string[] regions = ["EU", "EU", "NA"];
+        var entries = services
+            .Select((at, i) => new ConsensusEntry(
+                ServiceConsensus.Canonical(at), $"ouvert {i + 1}", [.. Enumerable.Repeat((byte)(i + 1), 8)], regions[i % regions.Length]))
+            .ToList();
+
+        return ServiceConsensus.SignV2(
+            new ServiceConsensus(1, issued, issued + (long)ServiceConsensus.Lifetime.TotalSeconds, entries), key);
+    }
+
     private static async Task<bool> ScenarioAsync(
-        string name, byte[] document, ECDsa key, OpenCircleSettings settings, bool expectOpen, CancellationToken ct)
+        string name, byte[] document, ECDsa key, OpenCircleSettings settings, bool expectOpen, CancellationToken ct,
+        RendezvousAddress? nearestRelay = null)
     {
         Console.WriteLine($"── {name} ──");
 
@@ -144,15 +183,6 @@ public static class OpenCircleRun
             Path.Combine(root, "bob"), new CacheSettings(), clock, _ => long.MaxValue);
 
         var manifest = await FederationRun.TinyAppearanceAsync(aliceStore, ct).ConfigureAwait(false);
-        var pairSecret = RandomNumberGenerator.GetBytes(32);
-        IReadOnlyList<RendezvousAddress> anchor = [settings.Anchor];
-
-        var aliceBook = new PairBook(clock);
-        aliceBook.Load([FederationRun.Pair(bobId, bobPublic, pairSecret, "Bob", anchor)]);
-
-        var bobBook = new PairBook(clock);
-        bobBook.Load([FederationRun.Pair(aliceId, alicePublic, pairSecret, "Alice", anchor)]);
-
         // Les services « ouverts » tournent sur la boucle locale, que le client
         // refuse d'ordinaire pour un lieu du cercle ouvert : le harnais lève ce
         // filtre, et lui seul.
@@ -167,6 +197,48 @@ public static class OpenCircleRun
             Console.WriteLine($"   ÉCHEC : liste du harnais refusée ({why})");
             return false;
         }
+
+        IReadOnlyList<RendezvousAddress> anchor = [settings.Anchor];
+        var pairSecret = RandomNumberGenerator.GetBytes(32);
+
+        // Le secret de paire décide qui est éligible au relais, la latence ne
+        // fait que départager : un service le plus proche mais non éligible ne
+        // serait jamais retenu, et le scénario échouerait une fois sur deux.
+        // On tire donc un secret qui rende nearestRelay éligible.
+        while (nearestRelay is { } target
+               && RelayPlacement.Eligible(
+                       pairSecret, aliceCircle.RelayEntriesFor(FederationRun.Pair(bobId, bobPublic, pairSecret, "Bob", anchor)), anchor)
+                   .Any(place => place.At == target) is false)
+            pairSecret = RandomNumberGenerator.GetBytes(32);
+
+        var aliceBook = new PairBook(clock);
+        // Seule Alice met Bob en relais seul : elle n'envoie alors que des RTT
+        // synthétiques, 0 pour l'Europe, dont le plus proche est nearestRelay.
+        // Bob envoie de vrais RTT. Les deux en relais seul donneraient 0 à
+        // deux services européens, et l'empreinte trancherait au hasard.
+        var bobForAlice = FederationRun.Pair(bobId, bobPublic, pairSecret, "Bob", anchor);
+        aliceBook.Load([nearestRelay is null ? bobForAlice : bobForAlice with { Policy = ConnectionPolicy.RelayOnly }]);
+
+        var bobBook = new PairBook(clock);
+        bobBook.Load([FederationRun.Pair(aliceId, alicePublic, pairSecret, "Alice", anchor)]);
+
+        // Tout service autre que nearestRelay paraît 200 ms plus loin : sur la
+        // boucle locale, les vrais RTT sont trop proches pour départager.
+        RelayLatencies? Latencies() => nearestRelay is not { } near ? null : new RelayLatencies(clock, async (place, timeout, token) =>
+        {
+            var rtt = await RelayPing.PingAsync(place, _ => true, timeout, token).ConfigureAwait(false);
+            return rtt is null ? null : place.At == near ? rtt : rtt + TimeSpan.FromMilliseconds(200);
+        });
+
+        var aliceLatencies = Latencies();
+        var bobLatencies = Latencies();
+        var places = RelayPlacement.Eligible(pairSecret, aliceCircle.RelayEntriesFor(aliceBook.Listed[0]), anchor);
+
+        if (aliceLatencies is not null)
+            await aliceLatencies.RefreshAsync(places, ct, TimeSpan.Zero).ConfigureAwait(false);
+
+        if (bobLatencies is not null)
+            await bobLatencies.RefreshAsync(places, ct, TimeSpan.Zero).ConfigureAwait(false);
 
         var engineSettings = new SyncEngineSettings { DataChannels = 4 };
 
@@ -185,13 +257,15 @@ public static class OpenCircleRun
 
         await using var alice = new SyncEngine(
             aliceBook,
-            new PeerConnector(aliceLinks, FederationRun.Endpoint(settings.Anchor), clock, aliceLog, circle: aliceCircle, acceptOpenAddress: _ => true),
+            new PeerConnector(aliceLinks, FederationRun.Endpoint(settings.Anchor), clock, aliceLog, circle: aliceCircle, acceptOpenAddress: _ => true,
+                latencies: aliceLatencies),
             new StaticAppearance(manifest, alicePrint), new NarratingApplicator(aliceStore),
             aliceStore, aliceId, aliceIdentity, clock, new ConsoleLog("Alice"), engineSettings);
 
         await using var bob = new SyncEngine(
             bobBook,
-            new PeerConnector(bobLinks, FederationRun.Endpoint(settings.Anchor), clock, bobLog, circle: bobCircle, acceptOpenAddress: _ => true),
+            new PeerConnector(bobLinks, FederationRun.Endpoint(settings.Anchor), clock, bobLog, circle: bobCircle, acceptOpenAddress: _ => true,
+                latencies: bobLatencies),
             new StaticAppearance(null, bobPrint), narrator,
             bobStore, bobId, bobIdentity, clock, new ConsoleLog("Bob"), engineSettings);
 
@@ -212,11 +286,14 @@ public static class OpenCircleRun
 
         var applied = narrator.Applications > 0;
         var viaOpen = aliceLog.OpenMatches + bobLog.OpenMatches > 0;
-        var good = applied && viaOpen == expectOpen;
+        var nearestUsed = nearestRelay is not { } wanted
+            || aliceLog.Relays.Concat(bobLog.Relays).Any(relay => relay == ServiceConsensus.Canonical(wanted));
+        var good = applied && viaOpen == expectOpen && nearestUsed;
 
         Console.WriteLine($"   {(applied ? "apparence posée" : "aucun appariement")}, "
-                        + $"{(viaOpen ? "par le cercle ouvert" : "par l'ancrage")}, "
-                        + $"attendu : posée {(expectOpen ? "par le cercle ouvert" : "par l'ancrage")} → {(good ? "conforme" : "ÉCHEC")}");
+                        + $"{(viaOpen ? "par le cercle ouvert" : "par l'ancrage")}"
+                        + (nearestRelay is null ? "" : nearestUsed ? ", relais par le service le plus proche" : ", relais ailleurs")
+                        + $", attendu : posée {(expectOpen ? "par le cercle ouvert" : "par l'ancrage")} → {(good ? "conforme" : "ÉCHEC")}");
 
         try
         {
