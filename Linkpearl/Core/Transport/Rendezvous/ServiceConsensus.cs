@@ -11,8 +11,12 @@ namespace Linkpearl.Core.Transport.Rendezvous;
 /// <see cref="Family"/> est l'empreinte du /24 ou du /48 que l'autorité a vu
 /// en le sondant. Le client ne résout rien lui-même, et publier l'empreinte
 /// plutôt que l'adresse évite de coller une IP à côté de chaque nom.
+///
+/// <see cref="Region"/> est le continent que l'autorité déduit de cette même
+/// adresse, ou null. Seule la v2 la porte : la v1 l'ignore en écriture et la
+/// rend nulle en lecture.
 /// </remarks>
-public sealed record ConsensusEntry(string Address, string Label, byte[] Family);
+public sealed record ConsensusEntry(string Address, string Label, byte[] Family, string? Region = null);
 
 /// <summary>Une signature de la liste : l'identifiant de la clé, puis r‖s.</summary>
 public sealed record ConsensusSignature(byte[] KeyId, byte[] Signature);
@@ -30,6 +34,14 @@ public sealed record ConsensusSignature(byte[] KeyId, byte[] Signature);
 ///     entree    = longueur(1) || adresse || longueur(1) || libelle || famille(8)
 ///     signature = identifiant_cle(8) || r||s(64)
 ///     document  = liste || nombre_signatures(1) || signature*
+///
+///     liste_v2  = "linkpearl:consensus:v2" || version(4) || emise(8) || expire(8) || nombre(2) || entree_v2*
+///     entree_v2 = longueur(1) || adresse || longueur(1) || libelle || famille(8) || region(2)
+///
+/// Le préfixe de la v2 fait partie des octets signés : une signature de l'une
+/// ne vaut jamais pour l'autre. La lecture reconnaît la v2 à ce préfixe, qu'une
+/// v1 ne peut pas porter : sa version et sa date d'émission tomberaient des
+/// milliards d'années dans le futur.
 /// </remarks>
 public sealed record ServiceConsensus(uint Version, long Issued, long Expires, IReadOnlyList<ConsensusEntry> Entries)
 {
@@ -48,19 +60,30 @@ public sealed record ServiceConsensus(uint Version, long Issued, long Expires, I
     /// </remarks>
     public static readonly TimeSpan Lifetime = TimeSpan.FromDays(7);
 
+    public const int RegionSize = 2;
+
     private const int HeaderSize = 4 + 8 + 8 + 2;
 
     private static ReadOnlySpan<byte> FamilyInfo => "linkpearl:family:v1"u8;
 
+    private static ReadOnlySpan<byte> V2Prefix => "linkpearl:consensus:v2"u8;
+
     private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
-    public byte[] SignedPortion()
+    public byte[] SignedPortion() => Write(withRegions: false);
+
+    public byte[] SignedPortionV2() => Write(withRegions: true);
+
+    private byte[] Write(bool withRegions)
     {
         if (Entries.Count > MaxEntries)
             throw new ArgumentException($"{Entries.Count} entrées, plafond {MaxEntries}");
 
         using var stream = new MemoryStream();
         Span<byte> number = stackalloc byte[8];
+
+        if (withRegions)
+            stream.Write(V2Prefix);
 
         BinaryPrimitives.WriteUInt32BigEndian(number, Version);
         stream.Write(number[..4]);
@@ -80,18 +103,43 @@ public sealed record ServiceConsensus(uint Version, long Issued, long Expires, I
                 throw new ArgumentException($"famille de {entry.Family.Length} octets, {FamilySize} attendus");
 
             stream.Write(entry.Family);
+
+            if (withRegions)
+                WriteRegion(stream, entry.Region);
         }
 
         return stream.ToArray();
     }
 
+    private static void WriteRegion(MemoryStream stream, string? region)
+    {
+        if (region is null)
+        {
+            stream.WriteByte(0);
+            stream.WriteByte(0);
+            return;
+        }
+
+        if (region.Length != RegionSize || region.Any(letter => letter is < 'A' or > 'Z'))
+            throw new ArgumentException($"région « {region} » : deux lettres majuscules attendues");
+
+        stream.WriteByte((byte)region[0]);
+        stream.WriteByte((byte)region[1]);
+    }
+
     public static byte[] Assemble(ServiceConsensus list, IReadOnlyList<ConsensusSignature> signatures)
+        => Assemble(list.SignedPortion(), signatures);
+
+    public static byte[] AssembleV2(ServiceConsensus list, IReadOnlyList<ConsensusSignature> signatures)
+        => Assemble(list.SignedPortionV2(), signatures);
+
+    private static byte[] Assemble(byte[] signed, IReadOnlyList<ConsensusSignature> signatures)
     {
         if (signatures.Count is < 1 or > MaxSignatures)
             throw new ArgumentException($"{signatures.Count} signatures, de 1 à {MaxSignatures}", nameof(signatures));
 
         using var stream = new MemoryStream();
-        stream.Write(list.SignedPortion());
+        stream.Write(signed);
         stream.WriteByte((byte)signatures.Count);
 
         foreach (var signature in signatures)
@@ -106,12 +154,14 @@ public sealed record ServiceConsensus(uint Version, long Issued, long Expires, I
         return stream.ToArray();
     }
 
-    public static byte[] Sign(ServiceConsensus list, ECDsa key)
-    {
-        var signature = key.SignData(
-            list.SignedPortion(), HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
+    public static byte[] Sign(ServiceConsensus list, ECDsa key) => Sign(list.SignedPortion(), key);
 
-        return Assemble(list, [new ConsensusSignature(KeyId(PublicPoint(key)), signature)]);
+    public static byte[] SignV2(ServiceConsensus list, ECDsa key) => Sign(list.SignedPortionV2(), key);
+
+    private static byte[] Sign(byte[] signed, ECDsa key)
+    {
+        var signature = key.SignData(signed, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
+        return Assemble(signed, [new ConsensusSignature(KeyId(PublicPoint(key)), signature)]);
     }
 
     public static byte[] PublicPoint(ECDsa key)
@@ -189,16 +239,20 @@ public sealed record ServiceConsensus(uint Version, long Issued, long Expires, I
         signatures = [];
         signedLength = 0;
 
-        if (document.Length < HeaderSize + 1)
+        var v2 = document.StartsWith(V2Prefix);
+        var start = v2 ? V2Prefix.Length : 0;
+
+        if (document.Length < start + HeaderSize + 1)
         {
             rejection = "liste signée tronquée";
             return false;
         }
 
-        var version = BinaryPrimitives.ReadUInt32BigEndian(document);
-        var issued = BinaryPrimitives.ReadInt64BigEndian(document[4..]);
-        var expires = BinaryPrimitives.ReadInt64BigEndian(document[12..]);
-        var count = BinaryPrimitives.ReadUInt16BigEndian(document[20..]);
+        var header = document[start..];
+        var version = BinaryPrimitives.ReadUInt32BigEndian(header);
+        var issued = BinaryPrimitives.ReadInt64BigEndian(header[4..]);
+        var expires = BinaryPrimitives.ReadInt64BigEndian(header[12..]);
+        var count = BinaryPrimitives.ReadUInt16BigEndian(header[20..]);
 
         if (count > MaxEntries)
         {
@@ -212,7 +266,7 @@ public sealed record ServiceConsensus(uint Version, long Issued, long Expires, I
             return false;
         }
 
-        var offset = HeaderSize;
+        var offset = start + HeaderSize;
         var entries = new List<ConsensusEntry>(count);
 
         for (var i = 0; i < count; i++)
@@ -238,8 +292,35 @@ public sealed record ServiceConsensus(uint Version, long Issued, long Expires, I
                 return false;
             }
 
-            entries.Add(new ConsensusEntry(address, label, document.Slice(offset, FamilySize).ToArray()));
+            var family = document.Slice(offset, FamilySize).ToArray();
             offset += FamilySize;
+
+            string? region = null;
+
+            if (v2)
+            {
+                if (offset + RegionSize > document.Length)
+                {
+                    rejection = $"région {i} tronquée";
+                    return false;
+                }
+
+                var raw = document.Slice(offset, RegionSize);
+                offset += RegionSize;
+
+                if (raw[0] != 0 || raw[1] != 0)
+                {
+                    if (raw[0] is < (byte)'A' or > (byte)'Z' || raw[1] is < (byte)'A' or > (byte)'Z')
+                    {
+                        rejection = $"région {i} illisible";
+                        return false;
+                    }
+
+                    region = string.Concat((char)raw[0], (char)raw[1]);
+                }
+            }
+
+            entries.Add(new ConsensusEntry(address, label, family, region));
         }
 
         if (offset >= document.Length)

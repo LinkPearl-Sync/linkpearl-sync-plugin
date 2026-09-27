@@ -120,4 +120,92 @@ public class ServiceConsensusTests
     [InlineData("2001:db8:1234:ffff::9", "5c5ad3455d6875fb")]
     public void La_famille_suit_le_24_ou_le_48(string address, string expected)
         => Assert.Equal(expected, Convert.ToHexStringLower(ServiceConsensus.Family(IPAddress.Parse(address))));
+
+    private static ServiceConsensus WithRegions() => new(
+        7, Now, Now + (long)ServiceConsensus.Lifetime.TotalSeconds,
+        [
+            new ConsensusEntry("rdv.ami.ch:47900", "Ami", [.. Enumerable.Repeat((byte)0x0F, 8)], "EU"),
+            new ConsensusEntry("rdv.loin.ch:47900", "Loin", [.. Enumerable.Repeat((byte)0x1E, 8)]),
+        ]);
+
+    [Fact]
+    public void Une_liste_v2_signee_se_verifie_avec_ses_regions()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var document = ServiceConsensus.SignV2(WithRegions(), key);
+
+        Assert.True(ServiceConsensus.TryVerify(document, [ServiceConsensus.PublicPoint(key)], Now, out var list, out var why), why);
+        Assert.Equal("EU", list!.Entries[0].Region);
+        Assert.Null(list.Entries[1].Region);
+        Assert.Equal(Enumerable.Repeat((byte)0x1E, 8), list.Entries[1].Family);
+    }
+
+    [Fact]
+    public void La_v1_ne_porte_pas_les_regions()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var document = ServiceConsensus.Sign(WithRegions(), key);
+
+        Assert.True(ServiceConsensus.TryVerify(document, [ServiceConsensus.PublicPoint(key)], Now, out var list, out var why), why);
+        Assert.All(list!.Entries, entry => Assert.Null(entry.Region));
+    }
+
+    [Fact]
+    public void Une_signature_v1_ne_vaut_pas_pour_la_v2()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var v1 = ServiceConsensus.Sign(WithRegions(), key);
+        ServiceConsensus.TryParse(v1, out _, out var signatures, out _, out _);
+
+        var forged = ServiceConsensus.AssembleV2(WithRegions(), signatures);
+
+        Assert.False(ServiceConsensus.TryVerify(forged, [ServiceConsensus.PublicPoint(key)], Now, out _, out _));
+    }
+
+    [Fact]
+    public void Une_signature_v2_ne_vaut_pas_pour_la_v1()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var v2 = ServiceConsensus.SignV2(WithRegions(), key);
+        ServiceConsensus.TryParse(v2, out _, out var signatures, out _, out _);
+
+        var forged = ServiceConsensus.Assemble(WithRegions(), signatures);
+
+        Assert.False(ServiceConsensus.TryVerify(forged, [ServiceConsensus.PublicPoint(key)], Now, out _, out _));
+    }
+
+    [Fact]
+    public void Une_region_hors_des_majuscules_est_refusee_a_la_lecture()
+    {
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var document = ServiceConsensus.SignV2(WithRegions(), key);
+
+        // La région de la première entrée suit sa famille : on la retrouve par
+        // son contenu plutôt que par un décalage calculé à la main.
+        var at = document.AsSpan().IndexOf("EU"u8);
+        document[at] = (byte)'e';
+
+        Assert.False(ServiceConsensus.TryParse(document, out _, out _, out _, out var why));
+        Assert.Contains("région", why);
+    }
+
+    [Fact]
+    public void L_ecrivain_refuse_une_region_invalide()
+    {
+        var list = new ServiceConsensus(1, Now, Now + 60,
+            [new ConsensusEntry("rdv.ami.ch:47900", "Ami", [.. Enumerable.Repeat((byte)1, 8)], "eu")]);
+
+        Assert.Throws<ArgumentException>(() => list.SignedPortionV2());
+    }
+
+    [Fact]
+    public void Une_v2_tronquee_dans_sa_region_est_refusee()
+    {
+        var list = new ServiceConsensus(1, Now, Now + 60,
+            [new ConsensusEntry("rdv.ami.ch:47900", "Ami", [.. Enumerable.Repeat((byte)1, 8)], "EU")]);
+        var portion = list.SignedPortionV2();
+
+        Assert.False(ServiceConsensus.TryParse(portion[..^1], out _, out _, out _, out var why));
+        Assert.Contains("région", why);
+    }
 }
