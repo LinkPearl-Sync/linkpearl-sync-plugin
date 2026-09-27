@@ -114,6 +114,9 @@ public sealed class Plugin : IDalamudPlugin
 
     /// <summary>La redemande à l'autorité, toutes les six heures.</summary>
     private readonly ConsensusFetcher _consensusFetcher;
+    private readonly RelayLatencies _relayLatencies;
+    private readonly RelayLatencyLoop _relayLoop;
+    private DateTimeOffset _lastRelayTargets = DateTimeOffset.MinValue;
 
     /// <summary>Dérive, sur le pool, ce qu'il faut pour vérifier les joueurs visibles.</summary>
     private readonly ServiceBanScreening _banScreening;
@@ -239,6 +242,9 @@ public sealed class Plugin : IDalamudPlugin
         _banFetcher = new ServiceBanFetcher(_configuration, _serviceBans, Log);
         _openCircle = new OpenCircle(ConsensusKeys.Trusted, clock) { Enabled = _configuration.OpenCircle };
         _consensusFetcher = new ConsensusFetcher(_openCircle, Path.Combine(root, "consensus.bin"), Log);
+        _relayLatencies = new RelayLatencies(
+            clock, (place, timeout, ct) => RelayPing.PingAsync(place, ServiceConsensus.IsPublicAddress, timeout, ct));
+        _relayLoop = new RelayLatencyLoop(_relayLatencies, Log);
         _banScreening = new ServiceBanScreening(_serviceBans, Log);
         _presence.SetServiceBans(_serviceBans);
 
@@ -426,6 +432,7 @@ public sealed class Plugin : IDalamudPlugin
         _ = Task.Run(() => RefreshLoopAsync(_shutdown.Token), _shutdown.Token);
         _banFetcher.Start();
         _consensusFetcher.Start();
+        _relayLoop.Start();
         _ = Task.Run(() => SyncLoopAsync(_shutdown.Token), _shutdown.Token);
 
         Commands.AddHandler(Command, new CommandInfo((_, _) => Open())
@@ -682,7 +689,8 @@ public sealed class Plugin : IDalamudPlugin
                 new RendezvousEndpoint(_configuration.RendezvousHost, _configuration.RendezvousPort),
                 _clock,
                 new PluginLogSink(Log, "moteur"),
-                circle: _openCircle),
+                circle: _openCircle,
+                latencies: _relayLatencies),
             _appearance, _applicator, _cacheKeeper.Store, _pairing.Id!.Value, _pairing.Identity!.Key, _clock,
             new PluginLogSink(Log, "moteur"), _engineSettings, groups: _groups, policies: _groups, bans: _serviceBans);
 
@@ -925,6 +933,16 @@ public sealed class Plugin : IDalamudPlugin
                             _consensusFetcher.RefreshSoon();
 
                         _lastOpenCircle = openCircle;
+
+                        // Les services où chaque paire pourrait relayer, recalculés
+                        // ici parce que c'est cette boucle qui lit déjà le carnet.
+                        if (_clock.UtcNow - _lastRelayTargets >= RelayLatencyLoop.TargetsEvery)
+                        {
+                            _lastRelayTargets = _clock.UtcNow;
+                            _relayLoop.Offer([.. _pairing.Book.Listed
+                                .SelectMany(pair => RelayPlacement.Eligible(pair.PairSecret, _openCircle.RelayEntriesFor(pair), pair.Rendezvous))
+                                .DistinctBy(place => place.Fingerprint)]);
+                        }
 
                         // Les joueurs à vérifier : ceux qui ont le plugin, et les
                         // paires du carnet, dont l'apparence se pose sans détection.
@@ -1726,6 +1744,7 @@ public sealed class Plugin : IDalamudPlugin
         _selfLoop.Dispose();
         _banFetcher.Dispose();
         _consensusFetcher.Dispose();
+        _relayLoop.Dispose();
         _banScreening.Dispose();
         _presence.Dispose();
 

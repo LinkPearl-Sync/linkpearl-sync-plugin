@@ -77,10 +77,29 @@ public sealed class ConsensusFetcher(OpenCircle circle, string path, IPluginLog 
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
             deadline.CancelAfter(Patience);
 
-            await using var client = new RendezvousClient();
-            await client.ConnectAsync(RendezvousList.Authority.Host, RendezvousList.Authority.Port, deadline.Token).ConfigureAwait(false);
+            // La v2 d'abord, qui porte les régions. Une autorité d'avant répond
+            // « trame inattendue » et ferme : on redemande alors la v1, sur une
+            // connexion neuve.
+            //
+            // Une coupure brutale après le refus ne doit pas davantage priver du
+            // repli : seule l'échéance écoulée y renonce.
+            byte[]? document;
+            string? failure;
 
-            var (document, failure) = await client.QueryConsensusAsync(deadline.Token).ConfigureAwait(false);
+            try
+            {
+                (document, failure) = await QueryAsync(v2: true, deadline.Token).ConfigureAwait(false);
+            }
+            catch (Exception e) when (deadline.IsCancellationRequested is false)
+            {
+                (document, failure) = (null, e.Message);
+            }
+
+            if (document is null)
+            {
+                log.Information($"Liste signée v2 indisponible ({failure}), repli sur la v1.");
+                (document, failure) = await QueryAsync(v2: false, deadline.Token).ConfigureAwait(false);
+            }
 
             if (document is null)
             {
@@ -102,6 +121,16 @@ public sealed class ConsensusFetcher(OpenCircle circle, string path, IPluginLog 
         {
             log.Information($"Autorité du réseau ouvert injoignable : {e.Message}");
         }
+    }
+
+    private static async Task<(byte[]? Document, string? Failure)> QueryAsync(bool v2, CancellationToken ct)
+    {
+        await using var client = new RendezvousClient();
+        await client.ConnectAsync(RendezvousList.Authority.Host, RendezvousList.Authority.Port, ct).ConfigureAwait(false);
+
+        return v2
+            ? await client.QueryConsensusV2Async(ct).ConfigureAwait(false)
+            : await client.QueryConsensusAsync(ct).ConfigureAwait(false);
     }
 
     public void Dispose()
