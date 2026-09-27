@@ -39,6 +39,10 @@ public sealed class RelayLatencyLoop(RelayLatencies latencies, IPluginLog log) :
         {
             // Déjà réveillée : elle lira la liste la plus récente.
         }
+        catch (ObjectDisposedException)
+        {
+            // Déjà libérée : la boucle n'est plus là pour mesurer.
+        }
     }
 
     private async Task LoopAsync(CancellationToken ct)

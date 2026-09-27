@@ -82,45 +82,68 @@ public sealed class ConsensusFetcher(OpenCircle circle, string path, IPluginLog 
             // connexion neuve.
             //
             // Une coupure brutale après le refus ne doit pas davantage priver du
-            // repli : seule l'échéance écoulée y renonce.
-            byte[]? document;
-            string? failure;
+            // repli, ni une v2 qui ne répond jamais : elle n'a que la moitié de
+            // la patience, pour laisser à la v1 le temps d'arriver.
+            using (var v2Deadline = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token))
+            {
+                v2Deadline.CancelAfter(Patience / 2);
 
-            try
-            {
-                (document, failure) = await QueryAsync(v2: true, deadline.Token).ConfigureAwait(false);
+                byte[]? v2Document;
+                string? v2Failure;
+
+                try
+                {
+                    (v2Document, v2Failure) = await QueryAsync(v2: true, v2Deadline.Token).ConfigureAwait(false);
+                }
+                catch (Exception e) when (deadline.IsCancellationRequested is false)
+                {
+                    (v2Document, v2Failure) = (null, e.Message);
+                }
+
+                // Hors du try : un disque qui refuse l'écriture d'une v2 acceptée
+                // n'est pas une raison de redemander la v1.
+                if (v2Document is not null)
+                {
+                    if (Accept(v2Document) is not { } refusal)
+                        return;
+
+                    v2Failure = $"refusée : {refusal}";
+                }
+
+                log.Information($"Liste signée v2 écartée ({v2Failure}), repli sur la v1.");
             }
-            catch (Exception e) when (deadline.IsCancellationRequested is false)
-            {
-                (document, failure) = (null, e.Message);
-            }
+
+            // Une v2 refusée (signature cassée côté service, lecteur qui dérive)
+            // ne doit pas priver d'une v1 valide. Aucun risque de régression :
+            // la v1 passe par la même vérification de signature et de version,
+            // il ne lui manque que les régions.
+            var (document, v1Failure) = await QueryAsync(v2: false, deadline.Token).ConfigureAwait(false);
 
             if (document is null)
             {
-                log.Information($"Liste signée v2 indisponible ({failure}), repli sur la v1.");
-                (document, failure) = await QueryAsync(v2: false, deadline.Token).ConfigureAwait(false);
-            }
-
-            if (document is null)
-            {
-                log.Information($"Liste signée indisponible : {failure}");
+                log.Information($"Liste signée indisponible : {v1Failure}");
                 return;
             }
 
-            if (circle.Offer(document, out var why) is false)
-            {
+            if (Accept(document) is { } why)
                 log.Warning($"Liste signée refusée : {why}");
-                return;
-            }
-
-            var temporary = path + ".part";
-            File.WriteAllBytes(temporary, document);
-            File.Move(temporary, path, overwrite: true);
         }
         catch (Exception e) when (ct.IsCancellationRequested is false)
         {
             log.Information($"Autorité du réseau ouvert injoignable : {e.Message}");
         }
+    }
+
+    /// <summary>Offre le document au cercle et l'enregistre s'il est pris ; rend la raison d'un refus.</summary>
+    private string? Accept(byte[] document)
+    {
+        if (circle.Offer(document, out var why) is false)
+            return why ?? "raison inconnue";
+
+        var temporary = path + ".part";
+        File.WriteAllBytes(temporary, document);
+        File.Move(temporary, path, overwrite: true);
+        return null;
     }
 
     private static async Task<(byte[]? Document, string? Failure)> QueryAsync(bool v2, CancellationToken ct)
