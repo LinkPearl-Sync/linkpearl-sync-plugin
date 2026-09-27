@@ -92,6 +92,15 @@ internal static class Card
     /// <summary>Largeur utile, marge droite déduite.</summary>
     public static float FullWidth => -Math.Max(1f, RightInset);
 
+    /// <summary>
+    /// Largeur disponible depuis le curseur, marge droite déduite.
+    /// </summary>
+    /// <remarks>
+    /// À utiliser partout où l'on mesure pour aligner à droite ou remplir la
+    /// ligne : <c>GetContentRegionAvail</c> seul mène au bord de la carte.
+    /// </remarks>
+    public static float Avail => Math.Max(1f, ImGui.GetContentRegionAvail().X - RightInset);
+
     internal static void Remember(uint key, float height) => Heights[key] = height;
 
     /// <summary>

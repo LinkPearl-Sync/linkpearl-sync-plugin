@@ -104,7 +104,7 @@ internal static class Feedback
     {
         ImGui.Dummy(new Vector2(0f, Theme.S(Theme.GapXl)));
 
-        var width = ImGui.GetContentRegionAvail().X;
+        var width = Card.Avail;
         // Vu en jeu le 26 septembre : à 72 px, le logo se perdait au milieu
         // d'une page vide. Il y a la place, c'est lui qui la remplit.
         var side  = Theme.S(160f);
@@ -148,13 +148,13 @@ internal static class Feedback
         var size = ImGui.CalcTextSize(safe);
 
         // Trop long pour tenir sur une ligne : centrer n'a plus de sens, on replie.
-        if (size.X > ImGui.GetContentRegionAvail().X - Card.RightInset)
+        if (size.X > Card.Avail)
         {
             Text.Wrapped(text, color);
             return;
         }
 
-        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + (ImGui.GetContentRegionAvail().X - size.X) * 0.5f);
+        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + (Card.Avail - size.X) * 0.5f);
         ImGui.TextColored(color, safe);
     }
 
@@ -162,7 +162,7 @@ internal static class Feedback
     public static void Alert(Vector4 color, FontAwesomeIcon icon, string text)
     {
         var origin = ImGui.GetCursorScreenPos();
-        var width  = ImGui.GetContentRegionAvail().X;
+        var width  = Card.Avail;
         var dl     = ImGui.GetWindowDrawList();
 
         var padX = Theme.S(Theme.CardPadX);

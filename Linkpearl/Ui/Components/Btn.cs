@@ -151,7 +151,7 @@ internal static class Btn
     /// </remarks>
     private static Vector2 Dimensions(BtnSize size, string caption) => size switch
     {
-        BtnSize.Block => new Vector2(-1f, 0f),
+        BtnSize.Block => new Vector2(Card.FullWidth, 0f),
         BtnSize.Small => new Vector2(Math.Max(Theme.S(88f), Width(caption)), 0f),
         _             => Vector2.Zero,   // largeur ajustée au contenu
     };

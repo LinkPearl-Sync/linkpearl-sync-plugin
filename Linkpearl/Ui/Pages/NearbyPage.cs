@@ -49,7 +49,7 @@ internal sealed class NearbyPage(
             return;
         }
 
-        ImGui.SetNextItemWidth(-1f);
+        ImGui.SetNextItemWidth(Card.FullWidth);
         ImGui.InputTextWithHint("##filtre_autour", "Filtrer par nom", ref _filter, 64);
         ImGui.Dummy(Theme.S(0f, Theme.GapS));
 

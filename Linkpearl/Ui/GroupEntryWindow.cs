@@ -122,7 +122,7 @@ public sealed class GroupEntryWindow : ThemedWindow
         Text.Small("Code fourni par le propriétaire ou un modérateur du groupe.", Theme.TextMuted);
         ImGui.Dummy(Theme.S(0f, Theme.GapS));
 
-        ImGui.SetNextItemWidth(-1f);
+        ImGui.SetNextItemWidth(Card.FullWidth);
         ImGui.InputTextWithHint("##group_code", "XXXX-XXXX-XXXX@service", ref _joinCode, 300);
 
         ImGui.SetNextItemWidth(FieldWidth);

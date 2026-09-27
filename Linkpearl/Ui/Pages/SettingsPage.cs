@@ -204,7 +204,8 @@ internal sealed class SettingsPage(
 
         ImGui.Dummy(Theme.S(0f, Theme.GapM));
 
-        ImGui.SetNextItemWidth(Card.FullWidth - Theme.S(110f) - Feedback.HintWidth);
+        ImGui.SetNextItemWidth(Card.Avail - Btn.Measure("Ajouter", BtnSize.Small, Icons.Invite)
+                                           - Theme.S(Theme.GapS) - Feedback.HintWidth);
         ImGui.InputTextWithHint("##nouveau", "rdv.exemple.ch ou rdv.exemple.ch:443", ref _newAddress, 260);
         ImGui.SameLine(0f, Theme.S(Theme.GapS));
 
@@ -292,7 +293,7 @@ internal sealed class SettingsPage(
         var buttons = ImGui.GetFrameHeight() * 2f + Theme.S(Theme.GapS);
 
         ImGui.SameLine(0f, Theme.S(Theme.GapS));
-        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + ImGui.GetContentRegionAvail().X - buttons);
+        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + Card.Avail - buttons);
 
         if (Btn.Icon(Icons.Refresh, "discover", tooltip: "Voir les services connus par celui-ci"))
             discover(entry.Address);

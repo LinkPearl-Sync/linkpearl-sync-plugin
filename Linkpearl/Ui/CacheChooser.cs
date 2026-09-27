@@ -52,7 +52,7 @@ internal sealed class CacheChooser(CacheKeeper keeper)
         var browse = Btn.Measure("Parcourir…", BtnSize.Small, Icons.Folder);
         var display = shown;
 
-        ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X - browse - Theme.S(Theme.GapS) - Feedback.HintWidth);
+        ImGui.SetNextItemWidth(Card.Avail - browse - Theme.S(Theme.GapS) - Feedback.HintWidth);
         ImGui.InputText("##cache_folder", ref display, 1024, ImGuiInputTextFlags.ReadOnly);
         ImGui.SameLine(0f, Theme.S(Theme.GapS));
 
@@ -80,7 +80,7 @@ internal sealed class CacheChooser(CacheKeeper keeper)
 
         Text.Label("Taille maximale du cache");
         ImGui.Dummy(Theme.S(0f, Theme.GapXs));
-        ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X);
+        ImGui.SetNextItemWidth(Card.Avail);
 
         if (ImGui.SliderInt("##cache_quota", ref quota, CacheKeeper.MinQuotaGiB, CacheKeeper.MaxQuotaGiB, "%d Go"))
         {

@@ -53,7 +53,7 @@ internal sealed class PairsPage(
 
         DrawBackupNudge();
 
-        ImGui.SetNextItemWidth(-1f);
+        ImGui.SetNextItemWidth(Card.FullWidth);
         ImGui.InputTextWithHint("##filtre_pairs", "Filtrer par nom", ref _filter, 64);
         ImGui.Dummy(Theme.S(0f, Theme.GapS));
 
