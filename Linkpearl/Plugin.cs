@@ -118,6 +118,12 @@ public sealed class Plugin : IDalamudPlugin
     private readonly RelayLatencyLoop _relayLoop;
     private DateTimeOffset _lastRelayTargets = DateTimeOffset.MinValue;
 
+    // Ce dont les cibles de mesure dépendent, relevé au dernier calcul : une
+    // liste acceptée, une paire ajoutée ou un autre personnage les recalcule
+    // tout de suite au lieu d'attendre les cinq minutes.
+    private ServiceConsensus? _relayTargetsConsensus;
+    private string _relayTargetsKey = string.Empty;
+
     /// <summary>Dérive, sur le pool, ce qu'il faut pour vérifier les joueurs visibles.</summary>
     private readonly ServiceBanScreening _banScreening;
 
@@ -936,6 +942,16 @@ public sealed class Plugin : IDalamudPlugin
 
                         // Les services où chaque paire pourrait relayer, recalculés
                         // ici parce que c'est cette boucle qui lit déjà le carnet.
+                        var consensus = _openCircle.Current;
+                        var relayKey = $"{_character}|{string.Join(',', _pairing.Book.Listed.Select(pair => $"{pair.Id}@{string.Join('+', pair.Rendezvous)}"))}";
+
+                        if (ReferenceEquals(consensus, _relayTargetsConsensus) is false || relayKey != _relayTargetsKey)
+                        {
+                            _relayTargetsConsensus = consensus;
+                            _relayTargetsKey = relayKey;
+                            _lastRelayTargets = DateTimeOffset.MinValue;
+                        }
+
                         if (_clock.UtcNow - _lastRelayTargets >= RelayLatencyLoop.TargetsEvery)
                         {
                             _lastRelayTargets = _clock.UtcNow;
