@@ -57,6 +57,58 @@ public class PairRequestMessageTests
         Assert.Contains("contrôle", why!, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData("Jhalen‮Tavari")]   // retournement de l'affichage
+    [InlineData("Jhalen​Tavari")]   // espace sans chasse, invisible
+    [InlineData("⁦Jhalen Tavari")]  // isolat bidi
+    public void Un_nom_porteur_de_caracteres_de_mise_en_forme_est_refuse(string name)
+    {
+        // Un nom qui s'affiche comme un autre est exactement ce qu'il faut à
+        // qui veut se faire passer pour quelqu'un qu'on a devant soi.
+        Assert.False(PairRequestMessage.TryDecode(Sample(name).Encode(), out _, out var why));
+        Assert.Contains("hors règles", why!);
+    }
+
+    [Theory]
+    [InlineData(" ")]
+    [InlineData("   ")]
+    [InlineData("　")]
+    public void Un_nom_fait_de_blancs_est_refuse(string name)
+    {
+        Assert.False(PairRequestMessage.TryDecode(Sample(name).Encode(), out _, out var why));
+        Assert.Contains("hors règles", why!);
+    }
+
+    [Fact]
+    public void Un_nom_vide_est_refuse()
+    {
+        Assert.False(PairRequestMessage.TryDecode(Sample("").Encode(), out _, out var why));
+        Assert.NotNull(why);
+    }
+
+    [Fact]
+    public void Un_nom_en_utf8_invalide_est_refuse_plutot_que_remplace()
+    {
+        var frame = Sample("Jhalen").Encode();
+        frame[^1] = 0xFF;
+
+        Assert.False(PairRequestMessage.TryDecode(frame, out _, out var why));
+        Assert.Contains("UTF-8", why!);
+    }
+
+    [Fact]
+    public void Un_nom_long_et_accentue_est_coupe_sur_une_frontiere_de_caractere()
+    {
+        // Soixante-cinq octets dont le dernier caractère en prend deux : une
+        // coupe brute à soixante-quatre laisserait une séquence tronquée, que
+        // la lecture stricte refuserait.
+        var name = new string('a', 63) + "é";
+        var encoded = Sample(name).Encode();
+
+        Assert.True(PairRequestMessage.TryDecode(encoded, out var parsed, out var why), why);
+        Assert.Equal(new string('a', 63), parsed!.CharacterName);
+    }
+
     [Fact]
     public void Un_nom_trop_long_est_tronque_a_l_encodage_et_accepte_a_la_lecture()
     {

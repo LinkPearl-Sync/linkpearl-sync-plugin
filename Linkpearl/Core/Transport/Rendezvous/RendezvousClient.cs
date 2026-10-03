@@ -19,6 +19,28 @@ public enum RelayAnswer
     Unavailable,
 }
 
+/// <summary>Ce qu'un service répond à une réclamation de boîtes.</summary>
+/// <remarks>Propre au client, comme <see cref="RelayAnswer"/> : sur le fil, c'est une trame.</remarks>
+public abstract record MailboxClaimOutcome
+{
+    private MailboxClaimOutcome()
+    {
+    }
+
+    /// <summary>Un booléen par adresse demandée, dans l'ordre : vrai si la boîte est désormais à nous.</summary>
+    public sealed record Held(bool[] Mine) : MailboxClaimOutcome;
+
+    /// <summary>
+    /// Service d'avant la réclamation : il a répondu « trame inattendue ». Les
+    /// services déployés coupent derrière, les suivants non : l'appelant ne
+    /// doit compter ni sur l'un ni sur l'autre, et ouvrir sans exclusivité.
+    /// </summary>
+    public sealed record NotSupported : MailboxClaimOutcome;
+
+    /// <summary>Refus, coupure ou réponse illisible : rien n'est acquis.</summary>
+    public sealed record Failed(string Reason) : MailboxClaimOutcome;
+}
+
 /// <summary>
 /// Client du service de rendez-vous.
 /// </summary>
@@ -26,8 +48,9 @@ public enum RelayAnswer
 /// Le rendez-vous n'est pas une autorité : tout ce qu'il rend est soit opaque,
 /// soit vérifié ailleurs. Un serveur malveillant peut refuser son service ou
 /// mentir sur une adresse, ce qui produit un échec de handshake, jamais une
-/// usurpation : l'autorisation vient du carnet local et la clé publique du code
-/// d'invitation.
+/// usurpation d'un pair déjà au carnet : l'autorisation vient du carnet local.
+/// Au pairage, en revanche, la clé publique arrive par lui : voir le modèle de
+/// confiance de docs/protocol.md.
 /// </remarks>
 public sealed class RendezvousClient : IAsyncDisposable
 {
@@ -82,6 +105,100 @@ public sealed class RendezvousClient : IAsyncDisposable
     /// </remarks>
     public Task OpenMailboxesAsync(IReadOnlyList<byte[]> addresses, CancellationToken ct)
         => SendAsync(RendezvousWire.MailboxOpen(addresses), ct);
+
+    /// <summary>
+    /// Réclame des boîtes pour cette seule connexion, et dit lesquelles sont à nous.
+    /// </summary>
+    /// <remarks>
+    /// L'adresse d'une boîte personnelle dérive d'un nom que tout le monde
+    /// voit : ouverte par <see cref="OpenMailboxesAsync"/>, n'importe quel
+    /// client pouvait la tenir en même temps que son titulaire, lire ses
+    /// demandes de pairage et y répondre à sa place. Réclamée, elle n'est qu'à
+    /// une connexion, et un bit baissé dit qu'une autre l'a prise avant nous.
+    ///
+    /// Les deux mêmes chemins que <see cref="QueryPresenceAsync"/>, pour la
+    /// même raison : jamais deux lecteurs sur un flux.
+    /// </remarks>
+    public async Task<MailboxClaimOutcome> ClaimMailboxesAsync(IReadOnlyList<byte[]> addresses, CancellationToken ct)
+    {
+        if (_listening)
+            return await ClaimThroughListenerAsync(addresses, ct).ConfigureAwait(false);
+
+        await SendAsync(RendezvousWire.MailboxClaim(addresses), ct).ConfigureAwait(false);
+
+        while (true)
+        {
+            var frame = await ReadFrameAsync(ct).ConfigureAwait(false);
+
+            // Une demande arrivée entre la réclamation et sa réponse est pour
+            // nous : la boîte vient de nous être donnée.
+            if (frame is [RendezvousKind.MailboxDelivery, ..])
+            {
+                Delivered?.Invoke(frame[1..]);
+                continue;
+            }
+
+            return ClaimOutcomeOf(frame, addresses.Count);
+        }
+    }
+
+    /// <summary>La réclamation qui laisse l'écouteur lire pour elle.</summary>
+    private async Task<MailboxClaimOutcome> ClaimThroughListenerAsync(IReadOnlyList<byte[]> addresses, CancellationToken ct)
+    {
+        var waiter = new TaskCompletionSource<byte[]?>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Une seule réclamation à la fois, comme pour la présence : la
+        // précédente, si elle attend encore, n'aura jamais sa réponse.
+        Interlocked.Exchange(ref _claimWaiter, waiter)?.TrySetResult(null);
+
+        await SendAsync(RendezvousWire.MailboxClaim(addresses), ct).ConfigureAwait(false);
+
+        await using var give = ct.Register(() => waiter.TrySetResult(null)).ConfigureAwait(false);
+
+        return ClaimOutcomeOf(await waiter.Task.ConfigureAwait(false), addresses.Count);
+    }
+
+    /// <summary>Le texte qu'un service renvoie à une trame qu'il ne connaît pas, avant de couper.</summary>
+    public const string UnexpectedFrame = "trame inattendue";
+
+    /// <summary>Ce que dit la réponse du service à une réclamation de <paramref name="asked"/> adresses.</summary>
+    /// <remarks>
+    /// Seul « trame inattendue » vaut « non pris en charge » : c'est la réponse
+    /// exacte d'un service d'avant. Toute autre erreur vient d'un service qui
+    /// connaît la réclamation et la refuse (limite de boîtes, trame
+    /// malformée) : se replier alors sur une ouverture partagée abandonnerait
+    /// l'exclusivité sans raison, donc c'est un échec, à retenter. Un bit qui
+    /// manque compte comme une boîte qui n'est pas à nous.
+    /// </remarks>
+    public static MailboxClaimOutcome ClaimOutcomeOf(byte[]? frame, int asked)
+    {
+        switch (frame)
+        {
+            case null:
+                return new MailboxClaimOutcome.Failed("connexion fermée par le service");
+
+            case [RendezvousKind.MailboxClaimed, ..]:
+                if (RendezvousWire.TryReadPresence(frame, out var held) is false)
+                    return new MailboxClaimOutcome.Failed("réponse de réclamation illisible");
+
+                var mine = new bool[asked];
+
+                for (var i = 0; i < asked && i < held.Length; i++)
+                    mine[i] = held[i];
+
+                return new MailboxClaimOutcome.Held(mine);
+
+            case [RendezvousKind.Error, .. var reason]:
+                var text = System.Text.Encoding.UTF8.GetString(reason);
+
+                return text == UnexpectedFrame
+                    ? new MailboxClaimOutcome.NotSupported()
+                    : new MailboxClaimOutcome.Failed(text);
+
+            default:
+                return new MailboxClaimOutcome.Failed("réponse inattendue du service");
+        }
+    }
 
     /// <summary>
     /// Demande lesquelles de ces adresses sont présentes.
@@ -280,6 +397,9 @@ public sealed class RendezvousClient : IAsyncDisposable
 
     private TaskCompletionSource<bool[]?>? _presenceWaiter;
 
+    /// <summary>Celui qui attend la réponse d'une réclamation : la trame brute, ou null.</summary>
+    private TaskCompletionSource<byte[]?>? _claimWaiter;
+
     /// <summary>
     /// Boucle de réception des remises.
     /// </summary>
@@ -307,6 +427,10 @@ public sealed class RendezvousClient : IAsyncDisposable
                         Delivered?.Invoke(frame[1..]);
                         break;
 
+                    case RendezvousKind.MailboxClaimed:
+                        Interlocked.Exchange(ref _claimWaiter, null)?.TrySetResult(frame);
+                        break;
+
                     // La réponse appartient à celui qui a posé la question.
                     case RendezvousKind.MailboxPresence:
                         Interlocked.Exchange(ref _presenceWaiter, null)?.TrySetResult(
@@ -322,8 +446,12 @@ public sealed class RendezvousClient : IAsyncDisposable
                     case RendezvousKind.Error when IsAbsentRecipient(frame):
                         break;
 
+                    // Une erreur ne dit pas à quelle question elle répond :
+                    // chaque attente en cours la reçoit, plutôt que d'attendre
+                    // une réponse qui ne viendra pas.
                     case RendezvousKind.Error:
                         Interlocked.Exchange(ref _presenceWaiter, null)?.TrySetResult(null);
+                        Interlocked.Exchange(ref _claimWaiter, null)?.TrySetResult(frame);
                         break;
                 }
             }
@@ -335,6 +463,7 @@ public sealed class RendezvousClient : IAsyncDisposable
             // La connexion s'en va : celui qui attendait doit l'apprendre plutôt
             // que d'attendre une trame qui ne viendra plus.
             Interlocked.Exchange(ref _presenceWaiter, null)?.TrySetResult(null);
+            Interlocked.Exchange(ref _claimWaiter, null)?.TrySetResult(null);
         }
     }
 

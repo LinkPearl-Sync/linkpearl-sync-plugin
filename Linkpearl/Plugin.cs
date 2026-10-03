@@ -264,6 +264,8 @@ public sealed class Plugin : IDalamudPlugin
             ourFingerprint: () => _state.Self?.Fingerprint);
         _candidate = new AdmissionCandidate(clock);
         _presence.Attach(_admissionHost, _candidate);
+        _presence.SetBlockedCheck(_pairing.IsBlocked);
+        _presence.MailboxContested += OnMailboxContested;
         _groupActions = BuildGroupActions();
 
         // Un épinglage arrive d'un handshake, hors du thread du jeu : l'écriture
@@ -409,7 +411,7 @@ public sealed class Plugin : IDalamudPlugin
         _windows.AddWindow(_window);
         _windows.AddWindow(_groupEntry);
         _windows.AddWindow(new RequestToasts(
-            _presence, _state, () => _window.ShowsRequests, _window.OpenRequests, Accept, Decline,
+            _presence, _pairing, _state, () => _window.ShowsRequests, _window.OpenRequests, Accept, Decline,
             () => _admissionHost.Pending, _groupActions.Approve, _groupActions.Decline));
 
         _onboarding = new OnboardingWindow(
@@ -531,11 +533,11 @@ public sealed class Plugin : IDalamudPlugin
     /// </remarks>
     private MenuItem? PairingMenuItem(string name, ushort world, PlayerFingerprint fingerprint)
     {
+        // Par empreinte, donc par nom et par monde : un homonyme d'un autre
+        // monde ne doit pas se voir accorder ce que demandait quelqu'un d'autre.
         var incoming = _presence.RequestCount == 0
             ? null
-            : _presence.PeekRequests().FirstOrDefault(request =>
-                  request.WorldId == world
-               && string.Equals(request.CharacterName, name, StringComparison.OrdinalIgnoreCase));
+            : _presence.PeekRequests().FirstOrDefault(request => request.Sender == fingerprint);
 
         if (incoming is not null)
         {
@@ -558,7 +560,7 @@ public sealed class Plugin : IDalamudPlugin
         if (_state.Nearby.FirstOrDefault(nearby => nearby.Fingerprint == fingerprint) is not { } target)
             return null;
 
-        var sent = _presence.PendingOutgoing.ContainsKey(fingerprint);
+        var sent = _presence.HasPendingRequestTo(fingerprint);
 
         return new MenuItem
         {
@@ -706,7 +708,7 @@ public sealed class Plugin : IDalamudPlugin
         _engine.PairEnded += pair =>
         {
             _pairing.Save();
-            Report($"{pair.DisplayName} a mis fin au pairage.");
+            Report($"{Glyphs.Safe(pair.DisplayName)} a mis fin au pairage.");
         };
         _engine.RevocationDelivered += _ => _pairing.Save();
         _engine.BookChanged += () => _pairing.Save();
@@ -891,12 +893,11 @@ public sealed class Plugin : IDalamudPlugin
                         _presence.SetGroups(_groups.All);
                         await _presence.EnsureOpenAsync(self.Fingerprint, ct).ConfigureAwait(false);
 
-                        // L'autre a dit oui à notre demande : le pair entre au
-                        // carnet sans rien redemander à celui qui a invité.
-                        while (_presence.TryTakeAcceptance(out var accepted) && accepted is not null)
-                            Report($"{accepted.CharacterName} a accepté : {_pairing.AddFromRequest(accepted)}");
-
                         _state.Nearby = await _objectSource.SnapshotAsync(ct).ConfigureAwait(false);
+
+                        // Après l'instantané : une acceptation ne conclut que si
+                        // celui qui l'annonce est devant nous maintenant.
+                        SettleAcceptances();
 
                         // Mesuré : 345 Mo par mois et par joueur à trois
                         // secondes, contre 20 à quinze et seulement quand le
@@ -1366,8 +1367,70 @@ public sealed class Plugin : IDalamudPlugin
         Report(await _presence.RequestPairAsync(target, self, _shutdown.Token).ConfigureAwait(false));
     }
 
+    /// <summary>Ce joueur, nom et monde, est-il devant nous ?</summary>
+    private bool IsVisible(PlayerFingerprint fingerprint)
+        => _state.Nearby.Any(player => player.Fingerprint == fingerprint);
+
+    /// <summary>
+    /// Tranche les réponses à nos demandes de pairage.
+    /// </summary>
+    /// <remarks>
+    /// Le nom d'une acceptation est dit au joueur, jamais au journal, qui ne
+    /// garde qu'un repère tiré de la clé.
+    /// </remarks>
+    private void SettleAcceptances()
+    {
+        foreach (var (accepted, verdict) in _presence.SettleAcceptances(IsVisible))
+        {
+            var name = Glyphs.Safe(accepted.CharacterName);
+
+            switch (verdict)
+            {
+                // L'autre a dit oui à notre demande : le pair entre au carnet
+                // sans rien redemander à celui qui a invité.
+                case AcceptanceVerdict.Concluded:
+                    Log.Information($"Demande acceptée ({accepted.Tag}).");
+                    Report($"{name} a accepté : {_pairing.AddFromRequest(accepted)}");
+                    break;
+
+                // Deux clés ont répondu au même aléa : l'une des deux a lu
+                // notre demande dans une boîte qui n'était pas la sienne, et
+                // rien ne dit laquelle. Le pair de la première est retiré.
+                case AcceptanceVerdict.Conflict conflict:
+                    _pairing.Remove(conflict.First);
+                    Log.Warning(
+                        $"Deux réponses différentes à la même demande de pairage ({PresenceService.Tag(conflict.First)}, "
+                      + $"puis {accepted.Tag}) : pairage annulé par prudence.");
+                    Report($"Deux réponses différentes sont arrivées à votre demande de pairage à {name}. "
+                         + "Pairage annulé par prudence : quelqu'un a peut-être répondu à sa place. "
+                         + "Redemander en face à face.");
+                    break;
+
+                case AcceptanceVerdict.NotVisible:
+                    Log.Information($"Acceptation ignorée ({accepted.Tag}) : l'expéditeur annoncé n'est pas à proximité.");
+                    Report($"Réponse de {name} ignorée : ce personnage n'est pas visible à proximité. "
+                         + "Se retrouver en jeu, puis redemander.");
+                    break;
+            }
+        }
+    }
+
+    /// <summary>Une autre connexion tient notre boîte personnelle : on le dit, une fois par épisode.</summary>
+    private void OnMailboxContested(RendezvousAddress service)
+        => Report(RequestsPage.ContestedMessage(service));
+
     private void Accept(IncomingRequest request)
     {
+        // Le bouton est grisé quand le demandeur n'est pas devant nous ; le
+        // menu contextuel, lui, ne s'ouvre que sur un joueur visible. Vérifié
+        // encore ici, parce que c'est la règle qui protège, pas le bouton.
+        if (IsVisible(request.Sender) is false)
+        {
+            Report($"{Glyphs.Safe(request.CharacterName)} n'est pas visible à proximité : "
+                 + "un pairage s'accepte en face à face.");
+            return;
+        }
+
         // Retirée avant tout await : la réponse part en tâche de fond, et un
         // second clic à l'image suivante accepterait sinon deux fois.
         _presence.Forget(request);
@@ -1664,7 +1727,7 @@ public sealed class Plugin : IDalamudPlugin
             if (group.Excludes(_pairing.Id, _state.Self?.Fingerprint))
             {
                 if (wasExcluded is false)
-                    Report($"Exclusion du groupe {group.Name}.");
+                    Report($"Exclusion du groupe {Glyphs.Safe(group.Name)}.");
 
                 return;
             }
@@ -1673,7 +1736,7 @@ public sealed class Plugin : IDalamudPlugin
                 Report($"Exclusion du groupe {Glyphs.Safe(group.Name)} levée.");
 
             if (policy.Dissolved && _groups.Remove(id))
-                Report($"Le groupe {group.Name} a été dissous.");
+                Report($"Le groupe {Glyphs.Safe(group.Name)} a été dissous.");
         }
         catch (Exception e)
         {
@@ -1736,6 +1799,7 @@ public sealed class Plugin : IDalamudPlugin
         // créerait un second.
         _shutdown.Cancel();
         _groups.PolicyAdopted -= OnPolicyAdopted;
+        _presence.MailboxContested -= OnMailboxContested;
         _cacheKeeper.Opened -= OnCacheOpened;
         _cacheKeeper.Lost -= OnCacheLost;
 

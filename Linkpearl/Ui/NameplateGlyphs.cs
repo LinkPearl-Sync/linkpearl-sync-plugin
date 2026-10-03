@@ -75,12 +75,12 @@ internal sealed class NameplateGlyphs : IDisposable
         if (enabled && nearby.Count > 0)
         {
             // Une demande porte le nom en clair : c'est ici, dans l'adaptateur,
-            // qu'elle se relie au joueur visible, jamais dans le noyau.
+            // qu'elle se relie au joueur visible, jamais dans le noyau. Par
+            // l'empreinte, nom et monde, calculée à la réception comme pour
+            // la page des demandes : les deux disent la même chose du même joueur.
             var requesting = requests.Count == 0
                 ? []
-                : nearby.Where(player => requests.Any(request =>
-                                   request.WorldId == player.WorldId
-                                && string.Equals(request.CharacterName, player.Name, StringComparison.OrdinalIgnoreCase)))
+                : nearby.Where(player => requests.Any(request => request.Sender == player.Fingerprint))
                         .Select(player => player.Fingerprint)
                         .ToList();
 

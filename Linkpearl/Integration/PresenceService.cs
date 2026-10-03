@@ -9,6 +9,7 @@ using Linkpearl.Core.Safety;
 using Linkpearl.Core.Identity;
 using Linkpearl.Core.Sync;
 using Linkpearl.Core.Transport.Rendezvous;
+using Linkpearl.Ui;
 
 namespace Linkpearl.Integration;
 
@@ -20,7 +21,18 @@ namespace Linkpearl.Integration;
 /// </param>
 public sealed record IncomingRequest(
     PeerId Id, byte[] PublicKey, byte[] PairingNonce, string CharacterName, ushort WorldId,
-    DateTimeOffset ReceivedAt, byte[] Ephemeral, byte[]? PairingMaterial = null);
+    DateTimeOffset ReceivedAt, byte[] Ephemeral, byte[]? PairingMaterial = null)
+{
+    /// <summary>L'empreinte du personnage annoncé, nom et monde : ce qu'on compare aux joueurs visibles.</summary>
+    /// <remarks>
+    /// Calculée une fois, ici dans l'adaptateur : comparer le nom seul
+    /// faisait passer pour « visible à proximité » un homonyme d'un autre monde.
+    /// </remarks>
+    public PlayerFingerprint Sender { get; } = PlayerFingerprint.Of(DalamudObjectSource.Normalize(CharacterName), WorldId);
+
+    /// <summary>Un repère court pour le journal, qui ne nomme personne.</summary>
+    public string Tag => PresenceService.Tag(Id);
+}
 
 /// <summary>
 /// Présence au rendez-vous, détection des joueurs alentour, demandes de pairage.
@@ -42,20 +54,66 @@ public sealed class PresenceService : IDisposable
     private readonly IPluginLog _log;
     private readonly IClock _clock;
 
-    /// <summary>Les demandes reçues, gardées par <see cref="_gate"/>.</summary>
+    /// <summary>Les demandes reçues, bornées en nombre et en âge.</summary>
     /// <remarks>
     /// Une liste et non une file : l'utilisateur répond dans l'ordre qu'il
     /// veut, et c'est la demande cliquée qu'il faut retirer, pas la plus ancienne.
     /// </remarks>
-    private readonly List<IncomingRequest> _incoming = [];
+    private readonly PairRequestInbox<IncomingRequest> _inbox;
 
-    /// <summary>Les acceptations reçues en réponse à nos propres demandes.</summary>
+    /// <summary>Nos demandes envoyées, et la surveillance de leurs acceptations.</summary>
+    private readonly OutgoingPairRequests _outgoing;
+
+    /// <summary>Les acceptations reçues en réponse à nos propres demandes, pas encore tranchées.</summary>
+    /// <remarks>
+    /// Tranchées par la boucle du plugin et non par le fil d'écoute : il faut
+    /// savoir si l'expéditeur est devant nous, et seul le plugin le sait.
+    /// </remarks>
     private readonly ConcurrentQueue<IncomingRequest> _accepted = new();
+
+    /// <summary>
+    /// Plafond de la file des acceptations. Seul qui connaît l'aléa d'une de
+    /// nos demandes y entre, et la boucle la vide toutes les quinze secondes :
+    /// au-delà, c'est une rafale, pas des réponses.
+    /// </summary>
+    private const int MaxQueuedAcceptances = 32;
+
     private readonly ConcurrentDictionary<PlayerFingerprint, DateTimeOffset> _detected = new();
 
     private readonly Dictionary<RendezvousAddress, Session> _sessions = [];
-    private readonly HashSet<string> _seen = [];
     private readonly Lock _gate = new();
+
+    /// <summary>Dit si une clé ou un personnage est bloqué au carnet, branché par le plugin.</summary>
+    private volatile Func<PeerId, PlayerFingerprint, bool>? _blocked;
+
+    /// <summary>
+    /// Levé une fois par épisode quand notre boîte personnelle reste tenue
+    /// par une autre connexion. Hors du fil du jeu.
+    /// </summary>
+    public event Action<RendezvousAddress>? MailboxContested;
+
+    /// <summary>Le délai entre deux réclamations d'une boîte qu'une autre connexion tient.</summary>
+    /// <remarks>
+    /// Une minute : le temps qu'un service voie mourir notre propre connexion
+    /// d'avant une coupure réseau, sans le solliciter à chaque ronde.
+    /// </remarks>
+    private static readonly TimeSpan ClaimRetry = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// Combien de temps on croit un service incapable de réclamer, avant de
+    /// lui redemander. Chaque essai coûte une connexion, que ce service coupe.
+    /// </summary>
+    private static readonly TimeSpan ClaimUnsupportedFor = TimeSpan.FromHours(6);
+
+    /// <summary>
+    /// Réclamations manquées d'affilée avant d'alerter.
+    /// </summary>
+    /// <remarks>
+    /// Deux, soit une minute environ : après une coupure, le service peut
+    /// tenir encore notre propre connexion morte le temps de s'en apercevoir,
+    /// et alerter sur un premier refus crierait au loup à chaque hoquet réseau.
+    /// </remarks>
+    private const int ContestStrikesBeforeAlert = 2;
 
     /// <summary>Remplacés d'un bloc par le fil de rafraîchissement, lus par les ouvertures.</summary>
     private volatile IReadOnlyList<GroupRecord> _groups = [];
@@ -143,6 +201,58 @@ public sealed class PresenceService : IDisposable
         public string? Failure { get; set; }
 
         public DateTimeOffset NextAttempt { get; set; }
+
+        /// <summary>Un service de nos réglages, qui sont aussi ceux du Public.</summary>
+        /// <remarks>
+        /// Les seuls où l'on tient sa boîte personnelle, où l'on détecte les
+        /// joueurs alentour et où l'on dépose des demandes de pairage. Un
+        /// service connu par la seule politique d'un groupe a été choisi par
+        /// un modérateur, pas par nous : il ne reçoit que les boîtes de ce
+        /// groupe, sans quoi il apprendrait notre nom et ceux de nos voisins.
+        /// </remarks>
+        public bool Settings { get; set; }
+
+        /// <summary>Le service d'une candidature en cours, où le groupe répond dans notre boîte personnelle.</summary>
+        public bool Candidacy { get; set; }
+
+        /// <summary>Tient notre boîte personnelle : réglages ou candidature.</summary>
+        public bool Personal => Settings || Candidacy;
+
+        /// <summary>Vrai si ce service a accepté la réclamation sur cette connexion.</summary>
+        public bool Exclusive { get; set; }
+
+        /// <summary>Jusqu'à quand on croit ce service d'avant la réclamation.</summary>
+        public DateTimeOffset ClaimUnsupportedUntil { get; set; }
+
+        /// <summary>Nos propres boîtes qu'une autre connexion tient.</summary>
+        public IReadOnlyList<byte[]> Contested { get; set; } = [];
+
+        /// <summary>Les adresses de notre boîte personnelle à la dernière réclamation, en hexadécimal.</summary>
+        public IReadOnlySet<string> PersonalAddresses { get; set; } = new HashSet<string>();
+
+        /// <summary>Réclamations d'affilée où notre boîte personnelle est restée à un autre.</summary>
+        public int ContestStrikes { get; set; }
+
+        /// <summary>L'alerte de l'épisode en cours est partie.</summary>
+        public bool ContestReported { get; set; }
+
+        public DateTimeOffset NextClaim { get; set; }
+    }
+
+    /// <summary>Ce qu'une connexion doit tenir.</summary>
+    /// <param name="Own">
+    /// Nos propres boîtes, dérivées de notre empreinte : la personnelle et
+    /// celles de présence de nos groupes. Réclamées, donc à nous seuls.
+    /// </param>
+    /// <param name="Shared">
+    /// Les boîtes d'admission, que tiennent ensemble tous les modérateurs d'un
+    /// groupe : ouvertes sans exclusivité, sans quoi le premier en ligne
+    /// fermerait la porte aux autres.
+    /// </param>
+    private sealed record MailboxPlan(
+        List<byte[]> Own, List<byte[]> Shared, IReadOnlySet<string> Personal, HashSet<string> Keys)
+    {
+        public int Count => Own.Count + Shared.Count;
     }
 
     /// <remarks>
@@ -156,7 +266,18 @@ public sealed class PresenceService : IDisposable
         _identity = identity;
         _clock = clock;
         _log = log;
+        _inbox = new PairRequestInbox<IncomingRequest>(clock);
+        _outgoing = new OutgoingPairRequests(clock);
     }
+
+    /// <summary>
+    /// Un repère court pour le journal, qui ne nomme personne.
+    /// </summary>
+    /// <remarks>
+    /// Les premiers caractères de l'identifiant de clé : assez pour suivre un
+    /// même pair d'une ligne à l'autre, rien qui mène à un nom de personnage.
+    /// </remarks>
+    public static string Tag(PeerId id) => $"pair {id.ToHex()[..8]}";
 
     /// <summary>Ce qu'on répond tant qu'aucun personnage n'est connecté.</summary>
     private const string NoCharacter =
@@ -212,45 +333,73 @@ public sealed class PresenceService : IDisposable
     public IReadOnlyDictionary<PlayerFingerprint, DateTimeOffset> Detected => _detected;
 
     /// <summary>Le nombre de demandes en attente, sans copier la liste.</summary>
-    public int RequestCount
+    public int RequestCount => _inbox.Count;
+
+    public IReadOnlyList<IncomingRequest> PeekRequests() => _inbox.Peek();
+
+    /// <summary>Retire une demande à laquelle l'utilisateur vient de répondre.</summary>
+    public void Forget(IncomingRequest request) => _inbox.Remove(request);
+
+    /// <summary>Oublie toutes les demandes, reçues et envoyées, au changement de personnage.</summary>
+    /// <remarks>
+    /// Une demande est adressée à la boîte d'un personnage : la montrer au
+    /// suivant lui ferait accepter, sous son nom, ce qu'on a proposé à un autre.
+    /// Et une acceptation de ce qu'avait demandé le précédent rangerait le pair
+    /// dans le carnet du suivant.
+    /// </remarks>
+    public void ForgetRequests()
+    {
+        _inbox.Clear();
+        _outgoing.Clear();
+        _accepted.Clear();
+    }
+
+    /// <summary>Vrai si une demande à ce joueur attend encore sa réponse.</summary>
+    public bool HasPendingRequestTo(PlayerFingerprint target) => _outgoing.IsPending(target);
+
+    /// <summary>Branche la question « est-il bloqué au carnet ? ». Appelé une fois par le plugin.</summary>
+    /// <remarks>Interrogée sur le fil d'écoute : elle ne doit jamais lever, et ne rien attendre.</remarks>
+    public void SetBlockedCheck(Func<PeerId, PlayerFingerprint, bool> blocked) => _blocked = blocked;
+
+    /// <summary>
+    /// Tranche les acceptations reçues depuis le dernier appel.
+    /// </summary>
+    /// <param name="visible">Ce joueur, nom et monde, est-il devant nous à cet instant ?</param>
+    /// <returns>
+    /// Chaque acceptation avec son verdict. Celle qui conclut porte le
+    /// matériau du secret de paire, que le carnet attend.
+    /// </returns>
+    public IReadOnlyList<(IncomingRequest Request, AcceptanceVerdict Verdict)> SettleAcceptances(
+        Func<PlayerFingerprint, bool> visible)
+    {
+        var settled = new List<(IncomingRequest, AcceptanceVerdict)>();
+
+        while (_accepted.TryDequeue(out var request))
+        {
+            var verdict = _outgoing.Settle(
+                request.Sender, request.Id, request.PairingNonce, request.Ephemeral, visible(request.Sender));
+
+            if (verdict is AcceptanceVerdict.Concluded concluded)
+                settled.Add((request with { PairingMaterial = concluded.PairingMaterial }, verdict));
+            else
+                settled.Add((request, verdict));
+        }
+
+        return settled;
+    }
+
+    /// <summary>Les services où notre boîte personnelle reste tenue par une autre connexion.</summary>
+    public IReadOnlyList<RendezvousAddress> ContestedServices
     {
         get
         {
             lock (_gate)
-                return _incoming.Count;
+            {
+                return [.. _sessions.Values
+                    .Where(session => session.Client is not null && session.ContestStrikes >= ContestStrikesBeforeAlert)
+                    .Select(session => session.At)];
+            }
         }
-    }
-
-    public IReadOnlyList<IncomingRequest> PeekRequests()
-    {
-        lock (_gate)
-            return [.. _incoming];
-    }
-
-    /// <summary>Retire une demande à laquelle l'utilisateur vient de répondre.</summary>
-    public void Forget(IncomingRequest request)
-    {
-        lock (_gate)
-            _incoming.Remove(request);
-    }
-
-    /// <summary>Oublie toutes les demandes, au changement de personnage.</summary>
-    /// <remarks>
-    /// Une demande est adressée à la boîte d'un personnage : la montrer au
-    /// suivant lui ferait accepter, sous son nom, ce qu'on a proposé à un autre.
-    /// </remarks>
-    public void ForgetRequests()
-    {
-        lock (_gate)
-            _incoming.Clear();
-    }
-
-    /// <summary>Une acceptation qui conclut une demande que nous avons envoyée.</summary>
-    public bool TryTakeAcceptance(out IncomingRequest? request)
-    {
-        var taken = _accepted.TryDequeue(out var value);
-        request = value;
-        return taken;
     }
 
     public void SetGroups(IReadOnlyList<GroupRecord> groups) => _groups = groups;
@@ -271,17 +420,62 @@ public sealed class PresenceService : IDisposable
         => _groupPresence.TryGetValue(member, out var groups) ? groups : [];
 
     /// <summary>
-    /// Ce qui distingue un jeu de boîtes d'un autre, pour savoir s'il faut rouvrir.
+    /// Les adresses qu'une connexion doit tenir, sous la fenêtre courante et la suivante.
     /// </summary>
     /// <remarks>
-    /// Des clés texte préfixées, parce que groupes et codes d'admission vivent
-    /// dans le même ensemble : un code renouvelé ou un droit d'admettre perdu
-    /// doit fermer la connexion exactement comme un groupe quitté, sans quoi
-    /// l'ancienne boîte d'admission resterait ouverte et continuerait de
-    /// recevoir des demandes pour un code révoqué.
+    /// Un service de nos réglages tient tout : boîte personnelle, présence de
+    /// chaque groupe, admission de chaque code qu'on peut admettre. Un service
+    /// connu par la seule politique d'un groupe ne tient que les boîtes des
+    /// groupes qui le nomment, et la boîte personnelle seulement le temps
+    /// d'une candidature qu'il porte.
+    ///
+    /// Les clés distinguent un jeu de boîtes d'un autre, pour savoir s'il faut
+    /// rouvrir. Préfixées, parce que groupes, codes d'admission et boîte
+    /// personnelle vivent dans le même ensemble : un code renouvelé, un droit
+    /// d'admettre perdu ou une candidature finie doit fermer la connexion
+    /// exactement comme un groupe quitté, sans quoi l'ancienne boîte resterait
+    /// ouverte et continuerait de recevoir.
     /// </remarks>
-    private static HashSet<string> Signature(IReadOnlyList<GroupRecord> groups, IReadOnlyList<byte[]> codes)
-        => [.. groups.Select(group => $"g:{group.Id}"), .. codes.Select(code => $"c:{Convert.ToHexStringLower(code)}")];
+    private MailboxPlan PlanFor(
+        Session session, PlayerFingerprint fingerprint, IReadOnlyList<GroupRecord> groups, IReadOnlyList<byte[]> codes)
+    {
+        var now = _clock.UtcNow;
+
+        bool Names(GroupRecord group) => session.Settings || group.Rendezvous.Contains(session.At);
+
+        var ours = groups.Where(Names).ToList();
+        var admitting = session.Settings
+            ? codes
+            : [.. codes.Where(code => groups.Any(group =>
+                  Names(group) && group.Policy?.Code is { } own && own.AsSpan().SequenceEqual(code)))];
+
+        var personal = session.Personal
+            ? MailboxAddress.Around(fingerprint, now).Select(address => address.ToBytes()).ToList()
+            : [];
+
+        List<byte[]> own =
+        [
+            .. personal,
+            .. ours.SelectMany(group => GroupDerivation.PresenceAround(group.Secret, fingerprint, now))
+                .Select(address => address.ToBytes()),
+        ];
+
+        List<byte[]> shared =
+        [
+            .. admitting.SelectMany(code => GroupDerivation.AdmissionAround(code, now)).Select(address => address.ToBytes()),
+        ];
+
+        HashSet<string> keys =
+        [
+            .. ours.Select(group => $"g:{group.Id}"),
+            .. admitting.Select(code => $"c:{Convert.ToHexStringLower(code)}"),
+        ];
+
+        if (session.Personal)
+            keys.Add("p");
+
+        return new MailboxPlan(own, shared, personal.Select(Convert.ToHexStringLower).ToHashSet(), keys);
+    }
 
     /// <summary>Les codes dont on ouvre la boîte d'admission.</summary>
     /// <remarks>
@@ -378,11 +572,14 @@ public sealed class PresenceService : IDisposable
         {
             // Le changement de personnage compte : les boîtes dérivent du nom,
             // donc celles de l'ancien doivent se fermer et celles du nouveau
-            // s'ouvrir.
+            // s'ouvrir. La contestation de l'ancien ne regarde pas le nouveau.
             if (session.Client is not null && session.OpenedFor != fingerprint)
+            {
                 Close(session);
+                ForgetContest(session);
+            }
 
-            var groups = Signature(_groups, AdmissionCodes());
+            var keys = PlanFor(session, fingerprint, _groups, AdmissionCodes()).Keys;
 
             // Quitter un groupe, ou perdre un code d'admission, coupe tout. Le service n'a pas d'opération pour
             // fermer une boîte, et rouvrir sur la connexion en place ne fait
@@ -390,15 +587,20 @@ public sealed class PresenceService : IDisposable
             // ses membres jusqu'à la prochaine reconnexion, des heures plus tard
             // peut-être. On ferme donc la connexion, et la même ronde la rouvre
             // à neuf, avec les seuls groupes restants.
-            if (session.Client is not null && session.OpenedKeys.IsSubsetOf(groups) is false)
+            if (session.Client is not null && session.OpenedKeys.IsSubsetOf(keys) is false)
                 Close(session);
 
             // Les adresses tournent toutes les trente minutes, et changent aussi
             // quand on rejoint un groupe.
             if (session.Client is { } open
                 && (session.OpenedWindow != MailboxAddress.IndexAt(_clock.UtcNow)
-                    || session.OpenedKeys.SetEquals(groups) is false))
+                    || session.OpenedKeys.SetEquals(keys) is false))
                 await ReopenAsync(session, open, fingerprint, ct).ConfigureAwait(false);
+
+            // Une boîte à nous qu'une autre connexion tenait : on la redemande,
+            // elle a pu se libérer.
+            if (session.Client is { } held && session.Contested.Count > 0 && _clock.UtcNow >= session.NextClaim)
+                await ReclaimAsync(session, held, ct).ConfigureAwait(false);
 
             if (session.Client is not null || _clock.UtcNow < session.NextAttempt)
                 continue;
@@ -410,11 +612,11 @@ public sealed class PresenceService : IDisposable
     /// <summary>Aligne les sessions sur la liste des services activés.</summary>
     private void Reconcile()
     {
+        var configured = _configuration.ActiveRendezvous.Select(entry => entry.Address).ToHashSet();
+
         // Les services d'un groupe comptent même s'ils ne sont pas dans nos
         // réglages : c'est là que ses membres nous cherchent.
-        var active = _configuration.ActiveRendezvous.Select(entry => entry.Address)
-            .Concat(_groups.SelectMany(group => group.Rendezvous))
-            .ToHashSet();
+        var active = configured.Concat(_groups.SelectMany(group => group.Rendezvous)).ToHashSet();
 
         // Le service d'une candidature en cours compte aussi : c'est là que
         // nous déposons la demande, et, n'étant pas encore membres, rien
@@ -422,8 +624,12 @@ public sealed class PresenceService : IDisposable
         // personnelle, que cette même session tient ouverte.
         // Sans NeedsPassword : cet état attend le joueur, pas le réseau, et une
         // nouvelle candidature rouvrira la session.
-        if (_candidate is { State: CandidacyState.Waiting or CandidacyState.Proving, Service: { } candidacy })
-            active.Add(candidacy);
+        RendezvousAddress? candidacy = _candidate is { State: CandidacyState.Waiting or CandidacyState.Proving, Service: { } code }
+            ? code
+            : null;
+
+        if (candidacy is { } service)
+            active.Add(service);
 
         lock (_gate)
         {
@@ -441,17 +647,28 @@ public sealed class PresenceService : IDisposable
             foreach (var at in active)
                 if (_sessions.ContainsKey(at) is false)
                     _sessions[at] = new Session { At = at, NextAttempt = _clock.UtcNow };
+
+            // Recalculé à chaque ronde : un service ajouté aux réglages, ou une
+            // candidature finie, change ce que la connexion doit tenir, et la
+            // comparaison des clés de PlanFor fait le reste.
+            foreach (var (at, session) in _sessions)
+            {
+                session.Settings = configured.Contains(at);
+                session.Candidacy = candidacy == at;
+            }
         }
     }
 
     private async Task OpenAsync(Session session, PlayerFingerprint fingerprint, CancellationToken ct)
     {
+        var groups = _groups;
+        var codes = AdmissionCodes();
+        var plan = PlanFor(session, fingerprint, groups, codes);
+
         // Le service refuse au-delà de RendezvousLimits.MaxMailboxesPerSession
         // (64) : se connecter pour se faire refuser, puis recommencer à chaque
         // ronde, ne mènerait nulle part. On le dit plutôt, sans rien envoyer.
-        var planned = Addresses(fingerprint, _groups, AdmissionCodes()).Count;
-
-        if (planned > MailboxBudget)
+        if (plan.Count > MailboxBudget)
         {
             lock (_gate)
             {
@@ -459,23 +676,59 @@ public sealed class PresenceService : IDisposable
                 session.NextAttempt = _clock.UtcNow + TimeSpan.FromSeconds(30);
             }
 
-            _log.Warning($"{planned} boîtes à ouvrir sur {session.At}, au-delà de {MailboxBudget} : ouverture refusée.");
+            _log.Warning($"{plan.Count} boîtes à ouvrir sur {session.At}, au-delà de {MailboxBudget} : ouverture refusée.");
             return;
         }
 
+        RendezvousClient? client = null;
+
         try
         {
-            var client = new RendezvousClient();
-            await client.ConnectAsync(session.At.Host, session.At.Port, ct).ConfigureAwait(false);
-
-            client.Delivered += OnDelivered;
-
             var window = MailboxAddress.IndexAt(_clock.UtcNow);
-            var groups = _groups;
-            var codes = AdmissionCodes();
-            var addresses = Addresses(fingerprint, groups, codes);
+            client = await ConnectAsync(session, ct).ConfigureAwait(false);
 
-            await client.OpenMailboxesAsync(addresses, ct).ConfigureAwait(false);
+            var exclusive = false;
+            IReadOnlyList<byte[]> contested = [];
+
+            if (plan.Own.Count > 0 && _clock.UtcNow >= session.ClaimUnsupportedUntil)
+            {
+                switch (await ClaimAsync(client, plan.Own, ct).ConfigureAwait(false))
+                {
+                    case MailboxClaimOutcome.Held held:
+                        exclusive = true;
+                        contested = Unheld(plan.Own, held.Mine);
+                        break;
+
+                    // Un service d'avant. Ceux déployés coupent après ce refus,
+                    // d'autres gardent la connexion : on repart d'une connexion
+                    // neuve dans les deux cas, sans réclamer, et on le retient
+                    // quelques heures pour ne pas payer une connexion de plus
+                    // à chaque ronde.
+                    case MailboxClaimOutcome.NotSupported:
+                        await client.DisposeAsync().ConfigureAwait(false);
+                        client = null;
+
+                        lock (_gate)
+                            session.ClaimUnsupportedUntil = _clock.UtcNow + ClaimUnsupportedFor;
+
+                        _log.Information(
+                            $"{session.At} ne connaît pas la réclamation exclusive des boîtes : ouverture partagée, "
+                          + "un autre client peut y lire nos demandes de pairage.");
+
+                        client = await ConnectAsync(session, ct).ConfigureAwait(false);
+                        break;
+
+                    case MailboxClaimOutcome.Failed failed:
+                        throw new InvalidOperationException($"réclamation refusée : {failed.Reason}");
+                }
+            }
+
+            // Sans exclusivité, nos propres boîtes s'ouvrent comme avant : mieux
+            // vaut une boîte partagée que pas de boîte du tout.
+            List<byte[]> opened = exclusive ? plan.Shared : [.. plan.Own, .. plan.Shared];
+
+            if (opened.Count > 0)
+                await client.OpenMailboxesAsync(opened, ct).ConfigureAwait(false);
 
             var life = new CancellationTokenSource();
 
@@ -486,17 +739,37 @@ public sealed class PresenceService : IDisposable
                 session.OpenedFor = fingerprint;
                 session.OpenedWindow = window;
                 session.Failure = null;
-                session.OpenedCount = addresses.Count;
-                session.OpenedKeys = Signature(groups, codes);
+                session.OpenedCount = plan.Count;
+                session.OpenedKeys = plan.Keys;
+                session.Exclusive = exclusive;
+                session.PersonalAddresses = plan.Personal;
+
+                // Sans réclamation, rien à redemander : un service d'avant ne
+                // dit pas qui d'autre tient nos boîtes.
+                if (exclusive is false)
+                {
+                    session.Contested = [];
+                    session.ContestStrikes = 0;
+                }
             }
 
-            _ = Task.Run(() => ListenAsync(session, client, life.Token), life.Token);
+            var listening = client;
+            client = null;
+            _ = Task.Run(() => ListenAsync(session, listening, life.Token), life.Token);
+
+            if (exclusive)
+                RecordContest(session, contested);
         }
         catch (Exception e)
         {
+            // Une connexion jamais confiée à la session se ferme ici, sans quoi
+            // elle garderait réclamées des boîtes que personne n'écoute.
+            if (client is not null)
+                await client.DisposeAsync().ConfigureAwait(false);
+
             lock (_gate)
             {
-                session.Failure = Describe(e);
+                session.Failure = e is InvalidOperationException ? e.Message : Describe(e);
 
                 // Trente secondes avant de réessayer : un service éteint ne doit
                 // pas être sollicité à chaque ronde de détection.
@@ -504,6 +777,137 @@ public sealed class PresenceService : IDisposable
             }
 
             _log.Warning(e, $"Ouverture des boîtes en échec sur {session.At}.");
+        }
+    }
+
+    /// <summary>Une connexion neuve, déjà branchée sur les dépôts reçus.</summary>
+    private async Task<RendezvousClient> ConnectAsync(Session session, CancellationToken ct)
+    {
+        var client = new RendezvousClient();
+
+        try
+        {
+            await client.ConnectAsync(session.At.Host, session.At.Port, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            await client.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+
+        client.Delivered += OnDelivered;
+        return client;
+    }
+
+    /// <summary>Réclame, avec un délai de garde.</summary>
+    /// <remarks>
+    /// Le même que l'interrogation de présence, pour la même raison : une
+    /// réponse perdue bloquerait toute la boucle de rafraîchissement.
+    /// </remarks>
+    private static async Task<MailboxClaimOutcome> ClaimAsync(
+        RendezvousClient client, IReadOnlyList<byte[]> addresses, CancellationToken ct)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(TimeSpan.FromSeconds(10));
+
+        try
+        {
+            return await client.ClaimMailboxesAsync(addresses, deadline.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested is false)
+        {
+            return new MailboxClaimOutcome.Failed("le service ne répond pas à la réclamation");
+        }
+    }
+
+    /// <summary>Les adresses dont le bit est baissé : une autre connexion les tient.</summary>
+    private static List<byte[]> Unheld(IReadOnlyList<byte[]> asked, bool[] mine)
+        => [.. asked.Where((_, i) => i >= mine.Length || mine[i] is false)];
+
+    /// <summary>
+    /// Retient ce qu'une réclamation a laissé à d'autres, et alerte si notre
+    /// boîte personnelle y reste.
+    /// </summary>
+    /// <remarks>
+    /// Seule la boîte personnelle alerte : c'est elle qui reçoit les demandes
+    /// de pairage, et son adresse dérive d'un nom que tout le monde voit. Une
+    /// boîte de présence de groupe ne se calcule qu'avec le secret du groupe :
+    /// la voir prise est dit au journal, et réclamé de nouveau comme les autres.
+    /// </remarks>
+    private void RecordContest(Session session, IReadOnlyList<byte[]> contested)
+    {
+        bool alert;
+
+        lock (_gate)
+        {
+            session.Contested = contested;
+            session.NextClaim = _clock.UtcNow + ClaimRetry;
+
+            var personal = contested.Any(address => session.PersonalAddresses.Contains(Convert.ToHexStringLower(address)));
+
+            if (personal)
+            {
+                session.ContestStrikes++;
+            }
+            else
+            {
+                session.ContestStrikes = 0;
+                session.ContestReported = false;
+            }
+
+            alert = session.ContestStrikes >= ContestStrikesBeforeAlert && session.ContestReported is false;
+
+            if (alert)
+                session.ContestReported = true;
+        }
+
+        if (contested.Count > 0)
+            _log.Warning($"{contested.Count} de nos boîtes sur {session.At} sont tenues par une autre connexion : nouvel essai dans une minute.");
+
+        if (alert)
+            MailboxContested?.Invoke(session.At);
+    }
+
+    /// <summary>Oublie la contestation, au changement de personnage.</summary>
+    private void ForgetContest(Session session)
+    {
+        lock (_gate)
+        {
+            session.Contested = [];
+            session.ContestStrikes = 0;
+            session.ContestReported = false;
+        }
+    }
+
+    /// <summary>Redemande, sur la connexion en place, les boîtes qu'une autre tenait.</summary>
+    private async Task ReclaimAsync(Session session, RendezvousClient client, CancellationToken ct)
+    {
+        var contested = session.Contested;
+
+        // Une réclamation compte peut-être pour le service comme une boîte de
+        // plus : au-delà du budget, on repart d'une connexion neuve, qui
+        // réclamera tout de nouveau.
+        if (session.OpenedCount + contested.Count > MailboxBudget)
+        {
+            Close(session);
+            return;
+        }
+
+        switch (await ClaimAsync(client, contested, ct).ConfigureAwait(false))
+        {
+            case MailboxClaimOutcome.Held held:
+                lock (_gate)
+                    session.OpenedCount += contested.Count;
+
+                RecordContest(session, Unheld(contested, held.Mine));
+                break;
+
+            default:
+                // Refus, silence ou coupure : la connexion n'est plus sûre, et la
+                // même ronde la rouvrira proprement.
+                _log.Warning($"Nouvelle réclamation en échec sur {session.At}.");
+                Close(session);
+                break;
         }
     }
 
@@ -520,13 +924,11 @@ public sealed class PresenceService : IDisposable
         Session session, RendezvousClient client, PlayerFingerprint fingerprint, CancellationToken ct)
     {
         var window = MailboxAddress.IndexAt(_clock.UtcNow);
-        var groups = _groups;
-        var codes = AdmissionCodes();
-        var addresses = Addresses(fingerprint, groups, codes);
+        var plan = PlanFor(session, fingerprint, _groups, AdmissionCodes());
 
         // Au-delà du budget, on repart d'une connexion neuve, rouverte dans la
         // même ronde : la fermeture ne repousse pas la prochaine tentative.
-        if (session.OpenedCount + addresses.Count > MailboxBudget)
+        if (session.OpenedCount + plan.Count > MailboxBudget)
         {
             Close(session);
             return;
@@ -534,19 +936,48 @@ public sealed class PresenceService : IDisposable
 
         try
         {
-            await client.OpenMailboxesAsync(addresses, ct).ConfigureAwait(false);
+            IReadOnlyList<byte[]>? contested = null;
+
+            if (session.Exclusive && plan.Own.Count > 0)
+            {
+                // Une boîte déjà à nous le reste : la réclamer de nouveau
+                // répond « à nous », et seules les nouvelles adresses comptent.
+                switch (await ClaimAsync(client, plan.Own, ct).ConfigureAwait(false))
+                {
+                    case MailboxClaimOutcome.Held held:
+                        contested = Unheld(plan.Own, held.Mine);
+                        break;
+
+                    case MailboxClaimOutcome.Failed failed:
+                        throw new InvalidOperationException($"réclamation refusée : {failed.Reason}");
+
+                    default:
+                        throw new InvalidOperationException("le service ne connaît plus la réclamation");
+                }
+
+                if (plan.Shared.Count > 0)
+                    await client.OpenMailboxesAsync(plan.Shared, ct).ConfigureAwait(false);
+            }
+            else
+            {
+                await client.OpenMailboxesAsync([.. plan.Own, .. plan.Shared], ct).ConfigureAwait(false);
+            }
 
             lock (_gate)
             {
                 session.OpenedWindow = window;
-                session.OpenedCount += addresses.Count;
+                session.OpenedCount += plan.Count;
+                session.PersonalAddresses = plan.Personal;
 
                 // L'union et non les seules clés courantes : cette connexion
                 // garde les boîtes déjà ouvertes. Si un groupe a été quitté ou
                 // un code perdu entre la vérification et ici, la ronde suivante
                 // le verra manquer et fermera la connexion.
-                session.OpenedKeys = new HashSet<string>(session.OpenedKeys.Union(Signature(groups, codes)));
+                session.OpenedKeys = new HashSet<string>(session.OpenedKeys.Union(plan.Keys));
             }
+
+            if (contested is not null)
+                RecordContest(session, contested);
         }
         catch (Exception e)
         {
@@ -558,25 +989,20 @@ public sealed class PresenceService : IDisposable
     }
 
     /// <summary>
-    /// Les adresses à ouvrir : la boîte personnelle, une boîte de présence
-    /// par groupe, et une boîte d'admission par code qu'on peut admettre,
-    /// chacune sous la fenêtre courante et la suivante.
-    /// </summary>
-    private List<byte[]> Addresses(
-        PlayerFingerprint fingerprint, IReadOnlyList<GroupRecord> groups, IReadOnlyList<byte[]> codes)
-        => [.. MailboxAddress.Around(fingerprint, _clock.UtcNow)
-            .Concat(groups.SelectMany(group => GroupDerivation.PresenceAround(group.Secret, fingerprint, _clock.UtcNow)))
-            .Concat(codes.SelectMany(code => GroupDerivation.AdmissionAround(code, _clock.UtcNow)))
-            .Select(address => address.ToBytes())];
-
-    /// <summary>
-    /// Demande à tous les services lesquels de ces joueurs utilisent le plugin.
+    /// Demande aux services de nos réglages lesquels de ces joueurs utilisent
+    /// le plugin, puis à chaque service lesquels sont de nos groupes.
     /// </summary>
     /// <remarks>
     /// Un joueur est détecté dès qu'un seul service reconnaît sa boîte, et
     /// l'union se fait sur ceux qui répondent. Exiger l'accord de tous rendrait
     /// la détection dépendante du plus mal en point ; et le silence d'un service
     /// n'est pas une réponse négative, donc il ne retire personne.
+    ///
+    /// La détection par boîte personnelle, jamais chez un service connu par
+    /// la seule politique d'un groupe : l'adresse personnelle se calcule
+    /// depuis le nom, et chaque interrogation lui apprendrait qui se tient
+    /// autour de nous. Ce service-là n'est interrogé que par les adresses de
+    /// présence de ses groupes (voir <see cref="GroupPresenceQueries"/>).
     /// </remarks>
     public async Task RefreshDetectionAsync(IReadOnlyList<NearbyPlayer> nearby, CancellationToken ct)
     {
@@ -591,7 +1017,7 @@ public sealed class PresenceService : IDisposable
         var seenSomewhere = new HashSet<PlayerFingerprint>();
         var answered = false;
 
-        foreach (var session in connected)
+        foreach (var session in connected.Where(session => session.Settings))
         {
             // Le serveur plafonne les interrogations : on découpe plutôt que de
             // se faire refuser.
@@ -633,55 +1059,54 @@ public sealed class PresenceService : IDisposable
         }
 
         // Rien de retiré tant que personne n'a répondu : perdre tout le monde
-        // parce que le réseau a hoqueté ferait clignoter la liste.
-        if (answered is false)
-            return;
-
-        foreach (var player in nearby)
+        // parce que le réseau a hoqueté ferait clignoter la liste. Les groupes,
+        // eux, s'interrogent quand même : un service de groupe ne dépend pas
+        // de la détection.
+        if (answered)
         {
-            if (seenSomewhere.Contains(player.Fingerprint))
-                _detected[player.Fingerprint] = _clock.UtcNow;
-            else
-                _detected.TryRemove(player.Fingerprint, out _);
+            foreach (var player in nearby)
+            {
+                if (seenSomewhere.Contains(player.Fingerprint))
+                    _detected[player.Fingerprint] = _clock.UtcNow;
+                else
+                    _detected.TryRemove(player.Fingerprint, out _);
+            }
         }
 
         await RefreshGroupPresenceAsync(nearby, connected, ct).ConfigureAwait(false);
     }
 
     /// <summary>
-    /// Demande, pour chaque joueur détecté, s'il est membre de l'un de nos groupes.
+    /// Demande, pour chaque joueur visible, s'il est membre de l'un de nos groupes.
     /// </summary>
     /// <remarks>
-    /// Seulement les joueurs détectés : un passant sans le plugin n'a pas de
-    /// boîte de groupe, et l'interroger ne ferait que coûter au service. Un
-    /// joueur qui a coupé la détection n'est donc pas trouvé par ses groupes,
-    /// ce que l'interface devra dire.
+    /// Aux services de nos réglages, seulement pour les joueurs détectés ; aux
+    /// services d'un groupe, pour tous les joueurs visibles, par les seules
+    /// adresses de ce groupe. Voir <see cref="GroupPresenceQueries"/>. Le
+    /// rythme est celui de la détection, qui appelle ceci.
     /// </remarks>
     private async Task RefreshGroupPresenceAsync(
         IReadOnlyList<NearbyPlayer> nearby, List<Session> connected, CancellationToken ct)
     {
         var groups = _groups;
-        var detected = nearby.Where(player => _detected.ContainsKey(player.Fingerprint)).ToList();
 
-        if (groups.Count == 0 || detected.Count == 0)
+        if (groups.Count == 0)
         {
             _groupPresence.Clear();
             return;
         }
 
-        var questions = detected
-            .SelectMany(player => groups.Select(group => (
-                player.Fingerprint,
-                Group: group.Id,
-                Address: GroupDerivation.PresenceAddress(group.Secret, player.Fingerprint, _clock.UtcNow).ToBytes())))
-            .ToList();
+        var visible = nearby.Select(player => player.Fingerprint).ToList();
+        var detected = visible.Where(_detected.ContainsKey).ToHashSet();
 
         var found = new HashSet<(PlayerFingerprint Member, GroupId Group)>();
         var answered = false;
 
         foreach (var session in connected)
         {
-            foreach (var batch in questions.Chunk(RendezvousWire.MaxQueriedAddresses))
+            var asked = GroupPresenceQueries.For(session.At, session.Settings, groups, visible, detected, _clock.UtcNow);
+
+            foreach (var batch in asked.Chunk(RendezvousWire.MaxQueriedAddresses))
             {
                 try
                 {
@@ -699,7 +1124,7 @@ public sealed class PresenceService : IDisposable
 
                     for (var i = 0; i < batch.Length && i < present.Length; i++)
                         if (present[i])
-                            found.Add((batch[i].Fingerprint, batch[i].Group));
+                            found.Add((batch[i].Member, batch[i].Group));
                 }
                 catch (Exception e)
                 {
@@ -722,7 +1147,7 @@ public sealed class PresenceService : IDisposable
     /// <summary>Dépose une demande de pairage dans la boîte d'un joueur.</summary>
     public async Task<string> RequestPairAsync(NearbyPlayer target, NearbyPlayer self, CancellationToken ct)
     {
-        if (Connected is false)
+        if (ConnectedToSettings is false)
             return "aucun service Linkpearl disponible.";
 
         if (_identity() is not { } identity)
@@ -748,31 +1173,41 @@ public sealed class PresenceService : IDisposable
         // privée de l'accord qui donnera le secret de paire. Une nouvelle
         // demande à la même personne remplace l'ancienne, dont la réponse ne
         // pourra plus conclure.
-        if (_pendingEphemerals.TryRemove(target.Fingerprint, out var previous))
-            previous.Dispose();
-
-        _pendingEphemerals[target.Fingerprint] = ephemeral;
-        PendingOutgoing[target.Fingerprint] = nonce;
+        _outgoing.Add(target.Fingerprint, nonce, ephemeral);
         return $"demande envoyée à {target.Name}.";
     }
 
+    /// <summary>Vrai si au moins un service de nos réglages répond.</summary>
+    private bool ConnectedToSettings
+    {
+        get
+        {
+            lock (_gate)
+                return _sessions.Values.Any(session => session.Client is not null && session.Settings);
+        }
+    }
+
     /// <summary>
-    /// Dépose sur tous nos services à la fois.
+    /// Dépose sur tous les services de nos réglages à la fois.
     /// </summary>
     /// <remarks>
     /// Nous ignorons lequel la cible utilise : sa boîte vit chez le service
     /// qu'elle a choisi, pas chez nous. Déposer partout est donc la seule façon
     /// de l'atteindre, et le destinataire dédoublonne à la réception.
+    ///
+    /// Partout, mais jamais chez un service connu par la seule politique d'un
+    /// groupe : une demande de pairage porte notre nom, notre clé et le nom de
+    /// la cible, que ce service n'a pas à apprendre.
     /// </remarks>
     private async Task<(int Delivered, string? Failure)> DepositEverywhereAsync(
         byte[] address, byte[] payload, CancellationToken ct)
     {
         var delivered = 0;
-        string? failure = null;
+        string? failure = "aucun service des réglages n'est disponible";
 
         foreach (var session in Snapshot())
         {
-            if (session.Client is null)
+            if (session.Client is null || session.Settings is false)
                 continue;
 
             try
@@ -881,12 +1316,6 @@ public sealed class PresenceService : IDisposable
         return "Demande envoyée au groupe.";
     }
 
-    /// <summary>Les aléas des demandes que nous avons envoyées, en attente de réponse.</summary>
-    public ConcurrentDictionary<PlayerFingerprint, byte[]> PendingOutgoing { get; } = new();
-
-    /// <summary>La moitié privée de l'accord de chaque demande en attente.</summary>
-    private readonly ConcurrentDictionary<PlayerFingerprint, ECDiffieHellman> _pendingEphemerals = new();
-
     /// <summary>
     /// Accepte une demande reçue et renvoie notre identité au demandeur.
     /// </summary>
@@ -897,7 +1326,7 @@ public sealed class PresenceService : IDisposable
     public async Task<(string Message, IncomingRequest? Agreed)> AcceptAsync(
         IncomingRequest request, NearbyPlayer self, CancellationToken ct)
     {
-        if (Connected is false)
+        if (ConnectedToSettings is false)
             return ("aucun service Linkpearl disponible.", null);
 
         if (_identity() is not { } identity)
@@ -913,12 +1342,10 @@ public sealed class PresenceService : IDisposable
             IsAccept: true, identity.PublicKey, request.PairingNonce, CryptoPrimitives.ExportPublicPoint(ephemeral),
             self.Name, self.WorldId);
 
-        var theirFingerprint = PlayerFingerprint.Of(request.CharacterName.Trim().ToLowerInvariant(), request.WorldId);
-
         try
         {
             var (delivered, failure) = await DepositEverywhereAsync(
-                MailboxAddress.Of(theirFingerprint, _clock.UtcNow).ToBytes(), reply.Encode(), ct)
+                MailboxAddress.Of(request.Sender, _clock.UtcNow).ToBytes(), reply.Encode(), ct)
                 .ConfigureAwait(false);
 
             // Accordé même si la réponse n'est pas partie, comme avant : le
@@ -926,7 +1353,7 @@ public sealed class PresenceService : IDisposable
             if (delivered == 0)
                 return ($"réponse impossible : {failure}", agreed);
 
-            return ($"{request.CharacterName} accepté.", agreed);
+            return ($"{Glyphs.Safe(request.CharacterName)} accepté.", agreed);
         }
         catch (Exception e)
         {
@@ -1083,11 +1510,14 @@ public sealed class PresenceService : IDisposable
             }
         });
 
+    /// <summary>Range une demande de pairage reçue, ou met une acceptation de côté. Aucun nom au journal.</summary>
     private void OnPairMessage(byte[] payload)
     {
+        // Au niveau de détail seulement : n'importe qui peut déposer, et un
+        // avertissement par dépôt hostile remplirait le journal.
         if (PairRequestMessage.TryDecode(payload, out var message, out var why) is false)
         {
-            _log.Warning($"Demande illisible reçue : {why}");
+            _log.Debug($"Demande illisible reçue : {why}");
             return;
         }
 
@@ -1099,46 +1529,50 @@ public sealed class PresenceService : IDisposable
         if (id == identity.Id)
             return;   // notre propre écho, sans intérêt
 
-        // Un expéditeur qui dépose sur plusieurs services ne doit produire
-        // qu'une seule invite : la même demande nous arrive alors par autant de
-        // chemins que nous partageons de services avec lui.
-        var key = $"{id.ToHex()}:{Convert.ToHexStringLower(message.PairingNonce)}";
-
-        lock (_gate)
-            if (_seen.Add(key) is false)
-                return;
-
         var request = new IncomingRequest(
             id, message.PublicKey, message.PairingNonce, message.CharacterName, message.WorldId, _clock.UtcNow,
             message.Ephemeral);
 
-        // Une acceptation qui porte le nonce de notre propre demande n'est pas
-        // une demande : c'est l'autre qui dit oui à ce que nous avons proposé.
-        // La faire accepter une seconde fois à celui qui a invité est absurde,
-        // et c'est ce qui se passait.
-        var sender = PlayerFingerprint.Of(message.CharacterName.Trim().ToLowerInvariant(), message.WorldId);
+        var sender = request.Sender;
 
-        if (message.IsAccept
-            && PendingOutgoing.TryGetValue(sender, out var ourNonce)
-            && ourNonce.AsSpan().SequenceEqual(message.PairingNonce))
+        // Une acceptation n'est pas une demande : c'est l'autre qui dit oui à
+        // ce que nous avons proposé. Elle n'entre dans la file que si elle
+        // porte l'aléa d'une demande à nous, et c'est la boucle du plugin qui
+        // tranche, parce qu'il faut savoir si l'expéditeur est devant nous.
+        // Une acceptation sans demande, souvent après un rechargement qui a
+        // perdu notre moitié de l'accord, ne peut rien conclure : en faire une
+        // demande ferait pairer deux carnets aux secrets différents.
+        if (message.IsAccept)
         {
-            PendingOutgoing.TryRemove(sender, out _);
-
-            // Le plugin a été rechargé depuis la demande : notre moitié de
-            // l'accord est perdue, et le secret ne peut plus être calculé.
-            if (_pendingEphemerals.TryRemove(sender, out var ours) is false)
+            if (_outgoing.Concerns(sender, message.PairingNonce) is false)
             {
-                _log.Warning($"{message.CharacterName} a accepté une demande dont l'accord est perdu : redemander.");
+                _log.Debug($"Acceptation sans demande en attente ({request.Tag}) : ignorée.");
                 return;
             }
 
-            using (ours)
-                _accepted.Enqueue(request with
-                {
-                    PairingMaterial = PairRequestMessage.AgreeOnPairing(ours, message.Ephemeral, message.PairingNonce),
-                });
+            if (_inbox.Witness(id, message.PairingNonce) is false)
+                return;
 
-            _log.Information($"{message.CharacterName} a accepté notre demande.");
+            if (_accepted.Count >= MaxQueuedAcceptances)
+            {
+                _log.Warning($"Acceptation jetée ({request.Tag}) : trop d'acceptations en attente.");
+                return;
+            }
+
+            _accepted.Enqueue(request);
+            return;
+        }
+
+        // Un expéditeur qui dépose sur plusieurs services ne doit produire
+        // qu'une seule invite : la même demande nous arrive alors par autant de
+        // chemins que nous partageons de services avec lui.
+        if (_inbox.Witness(id, message.PairingNonce) is false)
+            return;
+
+        // Bloqué au carnet : on l'a écarté, il n'a plus à nous solliciter.
+        if (_blocked?.Invoke(id, sender) is true)
+        {
+            _log.Information($"Demande de pairage ignorée ({request.Tag}) : expéditeur bloqué au carnet.");
             return;
         }
 
@@ -1152,10 +1586,21 @@ public sealed class PresenceService : IDisposable
             return;
         }
 
-        lock (_gate)
-            _incoming.Add(request);
+        switch (_inbox.Offer(id, sender, request))
+        {
+            case InboxOutcome.Full:
+                _log.Information(
+                    $"Demande de pairage jetée ({request.Tag}) : déjà {PairRequestInbox<IncomingRequest>.Capacity} en attente.");
+                break;
 
-        _log.Information($"Demande de pairage reçue de {message.CharacterName}.");
+            case InboxOutcome.Replaced:
+                _log.Information($"Demande de pairage reçue ({request.Tag}), à la place de la précédente du même expéditeur.");
+                break;
+
+            default:
+                _log.Information($"Demande de pairage reçue ({request.Tag}).");
+                break;
+        }
     }
 
     private async Task ListenAsync(Session session, RendezvousClient client, CancellationToken ct)
@@ -1224,10 +1669,6 @@ public sealed class PresenceService : IDisposable
     public void Dispose()
     {
         CloseAll();
-
-        foreach (var ephemeral in _pendingEphemerals.Values)
-            ephemeral.Dispose();
-
-        _pendingEphemerals.Clear();
+        _outgoing.Dispose();
     }
 }

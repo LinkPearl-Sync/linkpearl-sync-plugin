@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace Linkpearl.Ui;
@@ -52,22 +53,36 @@ internal static class Glyphs
     /// Rend un texte affichable. Le résultat est mémorisé : la méthode est
     /// appelée à chaque image, pour chaque ligne de liste.
     /// </summary>
+    /// <remarks>
+    /// Appelée aussi hors du thread du jeu, pour les messages du chat qui
+    /// citent un nom venu du réseau : le cache est donc sous verrou, qu'une
+    /// écriture concurrente corromprait sans rien lever.
+    /// </remarks>
     public static string Safe(string? text)
     {
         if (string.IsNullOrEmpty(text))
             return string.Empty;
 
-        if (Cache.TryGetValue(text, out var cached))
-            return cached;
+        lock (Gate)
+        {
+            if (Cache.TryGetValue(text, out var cached))
+                return cached;
+        }
 
         var result = Convert(text);
 
-        if (Cache.Count >= CacheLimit)
-            Cache.Clear();
+        lock (Gate)
+        {
+            if (Cache.Count >= CacheLimit)
+                Cache.Clear();
 
-        Cache[text] = result;
+            Cache[text] = result;
+        }
+
         return result;
     }
+
+    private static readonly Lock Gate = new();
 
     /// <summary>
     /// Comme <see cref="Safe"/>, pour un texte posé dans le libellé d'un widget ImGui.
@@ -86,7 +101,20 @@ internal static class Glyphs
 
         // NFKC d'abord : il ramène la pleine chasse et les alphabets
         // mathématiques au latin, ce qui règle la majorité des cas d'un coup.
-        foreach (var ch in text.Normalize(NormalizationForm.FormKC))
+        // Un texte qui ne se normalise pas (substitut orphelin) passe tel quel
+        // au tri qui suit, qui écarte justement les substituts.
+        string normalized;
+
+        try
+        {
+            normalized = text.Normalize(NormalizationForm.FormKC);
+        }
+        catch (ArgumentException)
+        {
+            normalized = text;
+        }
+
+        foreach (var ch in normalized)
         {
             if (Substitutes.TryGetValue(ch, out var replacement))
             {
@@ -101,9 +129,23 @@ internal static class Glyphs
         var result = builder.ToString().Trim();
 
         // Tout retirer donnerait une ligne vide, où l'utilisateur ne
-        // reconnaîtrait plus l'entrée qu'il a créée. Mieux vaut le texte brut.
-        return result.Length == 0 ? text.Trim() : result;
+        // reconnaîtrait plus l'entrée qu'il a créée. Mieux vaut le texte brut,
+        // mais jamais ses caractères de contrôle ou de mise en forme : un nom
+        // venu du réseau n'en garde aucun, même dans ce repli.
+        return result.Length == 0 ? new string([.. text.Where(IsInert)]).Trim() : result;
     }
+
+    /// <summary>
+    /// Faux pour un caractère de contrôle (Cc) ou de mise en forme (Cf).
+    /// </summary>
+    /// <remarks>
+    /// Les premiers coupent une ligne ou ouvrent une séquence d'échappement du
+    /// chat, les seconds sont invisibles ou retournent l'affichage (U+202E) :
+    /// un nom qui en porte peut se faire passer pour un autre à l'écran.
+    /// </remarks>
+    private static bool IsInert(char ch)
+        => char.IsControl(ch) is false
+        && CharUnicodeInfo.GetUnicodeCategory(ch) is not UnicodeCategory.Format;
 
     /// <summary>
     /// Vrai pour ce qu'Inter et FontAwesome savent dessiner.
@@ -115,6 +157,7 @@ internal static class Glyphs
     /// </remarks>
     private static bool IsRenderable(char ch)
         => char.IsSurrogate(ch) is false
+        && IsInert(ch)
         && (char.IsLetterOrDigit(ch)
          || char.IsPunctuation(ch)
          || char.IsSymbol(ch) is false && char.IsWhiteSpace(ch)

@@ -5,6 +5,7 @@ using Linkpearl.Core.Crypto;
 using Linkpearl.Core.Identity;
 using Linkpearl.Core.Safety;
 using Linkpearl.Core.Transport.Rendezvous;
+using Linkpearl.Ui;
 
 namespace Linkpearl.Integration;
 
@@ -112,6 +113,16 @@ public sealed class PairingService : IDisposable
 
         var again = _book.Find(request.Id) is { Trust: not PairTrust.Revoked };
 
+        // Le même personnage sous une autre clé : l'interface a prévenu que
+        // l'accepter remplacerait le pairage existant, et c'est ce qui se
+        // passe. Garder les deux laisserait deux lignes pour un même joueur,
+        // dont l'une épinglée sur une clé qu'il n'a peut-être plus. L'ancienne
+        // est retirée comme par le bouton, donc prévenue.
+        var replaced = ReplacedBy(request);
+
+        foreach (var old in replaced)
+            _book.Revoke(old.Id);
+
         _book.Add(request.Id, request.PublicKey, material, _identity.Id,
                   request.CharacterName, Here());
 
@@ -120,13 +131,45 @@ public sealed class PairingService : IDisposable
         // page « Autour de vous » continuaient de proposer un pairage déjà fait.
         // C'est aussi le personnage auquel on vient de dire oui : un pair qui en
         // annoncerait un autre sera contesté plutôt qu'épinglé à la place.
-        _book.PinFingerprint(request.Id, PlayerFingerprint.Of(
-            DalamudObjectSource.Normalize(request.CharacterName), request.WorldId));
+        _book.PinFingerprint(request.Id, request.Sender);
         _bookStore.Save(_book);
 
-        return again
-            ? $"Nouveau pairage avec {request.CharacterName}."
-            : $"{request.CharacterName} ajouté au carnet.";
+        var name = Glyphs.Safe(request.CharacterName);
+
+        return again || replaced.Count > 0
+            ? $"Nouveau pairage avec {name}, qui remplace le précédent."
+            : $"{name} ajouté au carnet.";
+    }
+
+    /// <summary>
+    /// Les pairs du carnet qu'accepter cette demande remplacerait : la même
+    /// clé, ou le même personnage épinglé sous une autre clé.
+    /// </summary>
+    /// <remarks>Lu par l'interface pour prévenir avant le clic, et par l'ajout pour retirer.</remarks>
+    public bool WouldReplace(IncomingRequest request)
+        => _book.Find(request.Id) is { Trust: not PairTrust.Revoked } || ReplacedBy(request).Count > 0;
+
+    private List<PairRecord> ReplacedBy(IncomingRequest request)
+        => [.. _book.Listed.Where(pair => pair.Id != request.Id && pair.PinnedFingerprint == request.Sender)];
+
+    /// <summary>Vrai si cette clé, ou ce personnage, est bloqué au carnet.</summary>
+    /// <remarks>
+    /// Interrogé depuis le fil d'écoute de la présence : une lecture du
+    /// carnet qui croiserait une écriture ne doit jamais lever jusque-là.
+    /// </remarks>
+    public bool IsBlocked(PeerId id, PlayerFingerprint fingerprint)
+    {
+        try
+        {
+            return _book.Find(id) is { Trust: PairTrust.Blocked }
+                || _book.All.Any(pair => pair.Trust is PairTrust.Blocked && pair.PinnedFingerprint == fingerprint);
+        }
+        catch (InvalidOperationException)
+        {
+            // Le carnet a changé pendant la lecture : la demande passe, et
+            // l'utilisateur la refusera lui-même.
+            return false;
+        }
     }
 
     /// <summary>Enregistre un carnet que le moteur vient de modifier.</summary>
@@ -149,7 +192,8 @@ public sealed class PairingService : IDisposable
 
         _book.SetPaused(id, paused);
         _bookStore.Save(_book);
-        return paused ? $"{record.DisplayName} est en pause." : $"{record.DisplayName} repris.";
+        var name = Glyphs.Safe(record.DisplayName);
+        return paused ? $"{name} est en pause." : $"{name} repris.";
     }
 
     /// <summary>Change les animations, VFX et sons acceptés de ce pair.</summary>
@@ -187,7 +231,7 @@ public sealed class PairingService : IDisposable
             _book.Revoke(id);
 
         _bookStore.Save(_book);
-        return $"{record.DisplayName} retiré du carnet.";
+        return $"{Glyphs.Safe(record.DisplayName)} retiré du carnet.";
     }
 
     public void Dispose() => Unbind();

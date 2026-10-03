@@ -70,6 +70,9 @@ contente de regarder ne peut pas calculer. Voir `protocol.md`.
 | Le contenu des demandes (nom, monde, clés) | Le contenu des apparences |
 | | Les échanges une fois la session établie |
 
+Sans TLS vers le service, tout ce que voit la colonne de gauche se lit aussi
+sur le réseau, entre le joueur et lui.
+
 ### Ce qui remplace la vérification par six mots
 
 Le nom du personnage. Celui qui reçoit une demande voit **de qui elle vient**,
@@ -79,7 +82,30 @@ comparaison de six mots sur un canal qu'ils n'utilisent pas.
 
 Un opérateur de rendez-vous malveillant peut toujours s'intercaler. C'est
 assumé : pour un cercle qui héberge son propre service, l'opérateur est l'un
-d'eux.
+d'eux. Et comme la liaison avec le service n'a pas de TLS, un attaquant actif
+sur le chemin réseau d'un joueur peut en faire autant.
+
+**Jusqu'en octobre 2026, n'importe quel client le pouvait aussi**, sans être
+le service. L'adresse d'une boîte dérive d'un nom que tout le monde voit, et
+rien n'empêchait de l'ouvrir en même temps que son titulaire : on y lisait ses
+demandes, on y répondait avant lui, et le demandeur épinglait le nom du
+titulaire sur la clé de l'intrus. Trois garde-fous depuis :
+
+- **La boîte personnelle est réclamée**, pour une seule connexion, sur un
+  service à jour. Qui la réclame avant son titulaire la garde, mais le
+  titulaire est averti, dans le chat et dans l'interface : « Votre boîte aux
+  lettres sur … est tenue par une autre connexion ». Un service ancien, lui,
+  ne garantit aucune exclusivité, et le plugin s'y replie sur l'ouverture
+  partagée d'avant.
+- **Une réponse ne conclut que si celui qu'elle annonce est visible**, nom et
+  monde, chez le demandeur. C'est la règle du face à face, appliquée par le
+  plugin et plus seulement par le joueur.
+- **Deux réponses différentes à la même demande annulent le pairage**, pendant
+  dix minutes après la première : rien ne dit laquelle était la bonne, et il
+  faut redemander en face à face.
+
+Aucun ne retire au service son pouvoir : il voit passer les clés, et peut les
+remplacer.
 
 ## Ce qui garde les codes
 
