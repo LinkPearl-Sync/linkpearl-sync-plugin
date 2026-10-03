@@ -244,15 +244,18 @@ internal sealed class SilentLog : ILogSink
 {
     public List<string> Warnings { get; } = [];
 
-    public void Debug(string message)
-    {
-    }
+    /// <summary>Tout ce qui a été écrit, à tous les niveaux, depuis n'importe quel fil.</summary>
+    public System.Collections.Concurrent.ConcurrentQueue<string> All { get; } = new();
 
-    public void Info(string message)
-    {
-    }
+    public void Debug(string message) => All.Enqueue(message);
 
-    public void Warning(string message, Exception? exception = null) => Warnings.Add(message);
+    public void Info(string message) => All.Enqueue(message);
+
+    public void Warning(string message, Exception? exception = null)
+    {
+        All.Enqueue(message);
+        Warnings.Add(message);
+    }
 }
 
 /// <summary>
@@ -1095,6 +1098,43 @@ public sealed class SyncEngineTests : IDisposable
 
         Assert.False(await world.SettleAsync(() => world.BobStatus().View.Manifest is not null, [], sees, rounds: 200));
         Assert.Empty(world.BobApplicator.Applied);
+    }
+
+    [Fact]
+    public async Task Le_journal_du_moteur_ne_nomme_jamais_le_personnage_d_un_pair()
+    {
+        // Un journal se colle dans un salon d'entraide : le nom donné à un pair
+        // est celui de son personnage, et n'a rien à y faire.
+        //
+        // Le nom est donné une fois la session ouverte : la poignée de main est
+        // journalisée par la session, hors du moteur, et ce test ne porte que
+        // sur les lignes du moteur.
+        await using var world = await TwoEnginesAsync();
+        const string name = "Yshtola Rhul";
+
+        Assert.True(
+            await world.SettleAsync(() => world.Bob.Statuses.SingleOrDefault()?.View.Fingerprint == AlicePrint, [], []),
+            "la session ne s'est jamais ouverte : " + world.Describe());
+
+        world.BobBook.Load([world.BobBook.Find(world.AliceId)! with { DisplayName = name }]);
+        var before = world.BobLog.All.Count;
+
+        IReadOnlyList<VisiblePlayer> sees = [new VisiblePlayer(new GameObjectRef(4, 100), AlicePrint)];
+
+        Assert.True(
+            await world.SettleAsync(() => world.BobApplicator.Applied.Count > 0, [], sees),
+            "l'apparence n'a jamais été posée : " + world.Describe());
+
+        // Puis une sortie du champ et une pause, qui ont leurs propres lignes.
+        Assert.True(await world.SettleAsync(() => world.BobApplicator.Removed.Count > 0, [], []));
+        world.BobBook.SetPaused(world.AliceId, true);
+        await world.TickAsync([], []);
+
+        var lines = world.BobLog.All.Skip(before).ToList();
+
+        Assert.NotEmpty(lines);
+        Assert.DoesNotContain(lines, line => line.Contains(name, StringComparison.Ordinal));
+        Assert.Contains(lines, line => line.Contains(world.AliceId.ToHex()[..8], StringComparison.Ordinal));
     }
 
     [Fact]

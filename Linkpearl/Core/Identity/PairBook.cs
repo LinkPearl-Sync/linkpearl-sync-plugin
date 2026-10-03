@@ -73,8 +73,21 @@ public sealed record PairRecord
 
     public required byte[] PairSecret { get; init; }
 
-    /// <summary>Nom donné localement. Jamais transmis.</summary>
+    /// <summary>Nom donné localement. Jamais transmis, ni journalisé.</summary>
+    /// <remarks>C'est le vrai nom du personnage : les journaux disent <see cref="LogTag"/>.</remarks>
     public required string DisplayName { get; init; }
+
+    /// <summary>
+    /// Ce qui désigne ce pair dans un journal : le début de son identifiant.
+    /// </summary>
+    /// <remarks>
+    /// Un journal se colle dans un salon d'entraide ; un nom de personnage
+    /// n'a rien à y faire (CLAUDE.md, « La vie privée »). Huit caractères
+    /// hexadécimaux suffisent à suivre un pair d'une ligne à l'autre et ne
+    /// disent rien de qui il est : l'identifiant est le haché de sa clé, ou,
+    /// pour un membre de groupe, un dérivé du secret du couple.
+    /// </remarks>
+    public string LogTag => Id.ToHex()[..8];
 
     /// <summary>
     /// Les lieux où ce pair et nous nous donnons rendez-vous, par ordre de

@@ -166,7 +166,10 @@ public sealed class LocalAppearance : ILocalAppearance, IDisposable
             catch (Exception e)
             {
                 Description = $"préparation impossible : {e.Message}";
-                _log.Warning(e, "Construction de l'apparence locale en échec.");
+                // Le type seul par défaut : une erreur de lecture porte le
+                // chemin d'un fichier de mod, donc le dossier de l'utilisateur.
+                _log.Warning($"Construction de l'apparence locale en échec ({e.GetType().Name}).");
+                _log.Debug(e, "Construction de l'apparence locale en échec.");
             }
             finally
             {

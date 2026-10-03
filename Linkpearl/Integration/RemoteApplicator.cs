@@ -339,7 +339,10 @@ public sealed class RemoteApplicator : IRemoteApplicator, IDisposable
         }
         catch (Exception e)
         {
-            _log.Warning(e, "Trace des collections illisible.");
+            // Le type seul par défaut : le message porte le chemin du fichier,
+            // donc le dossier de l'utilisateur, nom de session Windows compris.
+            _log.Warning($"Trace des collections illisible ({e.GetType().Name}).");
+            _log.Debug(e, "Trace des collections illisible.");
             return [];
         }
     }
@@ -355,7 +358,8 @@ public sealed class RemoteApplicator : IRemoteApplicator, IDisposable
         }
         catch (Exception e)
         {
-            _log.Warning(e, "Trace des collections non écrite : un rechargement laisserait des restes.");
+            _log.Warning($"Trace des collections non écrite : un rechargement laisserait des restes ({e.GetType().Name}).");
+            _log.Debug(e, "Trace des collections non écrite : un rechargement laisserait des restes.");
         }
     }
 

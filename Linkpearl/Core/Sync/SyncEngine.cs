@@ -464,11 +464,11 @@ public sealed class SyncEngine : IAsyncDisposable
                 try
                 {
                     await exchange.RefreshAsync(ct).ConfigureAwait(false);
-                    _log.Info($"{runtime.Pair.DisplayName} : réapplication demandée.");
+                    _log.Info($"{runtime.Pair.LogTag} : réapplication demandée.");
                 }
                 catch (Exception e)
                 {
-                    _log.Warning($"{runtime.Pair.DisplayName} : redemande du manifeste en échec.", e);
+                    _log.Warning($"{runtime.Pair.LogTag} : redemande du manifeste en échec.", e);
                 }
             }
         }
@@ -498,11 +498,11 @@ public sealed class SyncEngine : IAsyncDisposable
             try
             {
                 await exchange.RefreshAsync(ct).ConfigureAwait(false);
-                _log.Info($"{runtime.Pair.DisplayName} : réception changée ({effective}), manifeste redemandé.");
+                _log.Info($"{runtime.Pair.LogTag} : réception changée ({effective}), manifeste redemandé.");
             }
             catch (Exception e)
             {
-                _log.Warning($"{runtime.Pair.DisplayName} : redemande du manifeste en échec.", e);
+                _log.Warning($"{runtime.Pair.LogTag} : redemande du manifeste en échec.", e);
             }
         }
     }
@@ -535,7 +535,7 @@ public sealed class SyncEngine : IAsyncDisposable
             if (runtime.Session is { } open && _book.Find(id) is { Paused: true, Trust: PairTrust.Accepted })
                 await SendPauseAsync(runtime, open, ct).ConfigureAwait(false);
 
-            _log.Info($"{runtime.Pair.DisplayName} : pair retiré des actifs, session fermée.");
+            _log.Info($"{runtime.Pair.LogTag} : pair retiré des actifs, session fermée.");
             await TearDownAsync(id, runtime, ct).ConfigureAwait(false);
             _runtimes.Remove(id);
         }
@@ -563,7 +563,7 @@ public sealed class SyncEngine : IAsyncDisposable
             _book.SetPausedByPeer(id, true);
             runtime.Pair = _book.Find(id) ?? runtime.Pair;
 
-            _log.Info($"{runtime.Pair.DisplayName} : nous a mis en pause.");
+            _log.Info($"{runtime.Pair.LogTag} : nous a mis en pause.");
             BookChanged?.Invoke();
         }
     }
@@ -596,7 +596,7 @@ public sealed class SyncEngine : IAsyncDisposable
                 continue;
             }
 
-            _log.Info($"{runtime.Pair.DisplayName} : pairage rompu par le pair.");
+            _log.Info($"{runtime.Pair.LogTag} : pairage rompu par le pair.");
             PairEnded?.Invoke(runtime.Pair);
         }
     }
@@ -612,7 +612,7 @@ public sealed class SyncEngine : IAsyncDisposable
             if (_clock.UtcNow - sent < _settings.RevocationPatience)
                 continue;
 
-            _log.Info($"{runtime.Pair.DisplayName} : avis de retrait resté sans réponse.");
+            _log.Info($"{runtime.Pair.LogTag} : avis de retrait resté sans réponse.");
             await TearDownAsync(id, runtime, ct).ConfigureAwait(false);
             Retry(runtime, peerWasAbsent: false, "avis de retrait sans réponse");
         }
@@ -639,7 +639,7 @@ public sealed class SyncEngine : IAsyncDisposable
             }
             catch (Exception e)
             {
-                _log.Warning($"{runtime.Pair.DisplayName} : tentative en échec.", e);
+                _log.Warning($"{runtime.Pair.LogTag} : tentative en échec.", e);
                 result = new DialResult(null, false, e.Message);
             }
 
@@ -701,7 +701,7 @@ public sealed class SyncEngine : IAsyncDisposable
         }
         catch (Exception e)
         {
-            _log.Warning($"{runtime.Pair.DisplayName} : présence non annoncée.", e);
+            _log.Warning($"{runtime.Pair.LogTag} : présence non annoncée.", e);
         }
     }
 
@@ -745,7 +745,7 @@ public sealed class SyncEngine : IAsyncDisposable
             }
             catch (Exception e)
             {
-                _log.Warning($"{runtime.Pair.DisplayName} : politique de groupe non envoyée.", e);
+                _log.Warning($"{runtime.Pair.LogTag} : politique de groupe non envoyée.", e);
             }
         }
     }
@@ -772,11 +772,11 @@ public sealed class SyncEngine : IAsyncDisposable
                 .ConfigureAwait(false);
 
             runtime.NoticeSentAt = _clock.UtcNow;
-            _log.Info($"{runtime.Pair.DisplayName} : avis de retrait envoyé.");
+            _log.Info($"{runtime.Pair.LogTag} : avis de retrait envoyé.");
         }
         catch (Exception e)
         {
-            _log.Warning($"{runtime.Pair.DisplayName} : avis de retrait non envoyé.", e);
+            _log.Warning($"{runtime.Pair.LogTag} : avis de retrait non envoyé.", e);
         }
     }
 
@@ -812,11 +812,11 @@ public sealed class SyncEngine : IAsyncDisposable
             if (left > TimeSpan.Zero)
                 await Task.Delay(grace < left ? grace : left, ct).ConfigureAwait(false);
 
-            _log.Info($"{runtime.Pair.DisplayName} : avis de pause confié au lien.");
+            _log.Info($"{runtime.Pair.LogTag} : avis de pause confié au lien.");
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
-            _log.Warning($"{runtime.Pair.DisplayName} : avis de pause non envoyé.", e);
+            _log.Warning($"{runtime.Pair.LogTag} : avis de pause non envoyé.", e);
         }
     }
 
@@ -835,12 +835,12 @@ public sealed class SyncEngine : IAsyncDisposable
                 _runtimes.Remove(id);
                 _book.Remove(id);
 
-                _log.Info($"{runtime.Pair.DisplayName} : avis de retrait remis.");
+                _log.Info($"{runtime.Pair.LogTag} : avis de retrait remis.");
                 RevocationDelivered?.Invoke(runtime.Pair);
                 continue;
             }
 
-            _log.Info($"{runtime.Pair.DisplayName} : session tombée.");
+            _log.Info($"{runtime.Pair.LogTag} : session tombée.");
 
             var stable = _clock.UtcNow - runtime.SessionSince >= _settings.StableSession;
 
@@ -943,7 +943,7 @@ public sealed class SyncEngine : IAsyncDisposable
             }
             catch (Exception e)
             {
-                _log.Warning($"{runtime.Pair.DisplayName} : réannonce en échec.", e);
+                _log.Warning($"{runtime.Pair.LogTag} : réannonce en échec.", e);
             }
         }
     }
@@ -977,7 +977,7 @@ public sealed class SyncEngine : IAsyncDisposable
                 if (pinned != fingerprint)
                 {
                     if (runtime.Disputed is false)
-                        _log.Warning($"{runtime.Pair.DisplayName} : empreinte de personnage inattendue, rien n'est posé.");
+                        _log.Warning($"{runtime.Pair.LogTag} : empreinte de personnage inattendue, rien n'est posé.");
 
                     runtime.Disputed = true;
                     continue;
@@ -1012,7 +1012,7 @@ public sealed class SyncEngine : IAsyncDisposable
 
                 if (_applicator.CanApply(out var why) is false)
                 {
-                    _log.Debug($"{runtime.Pair.DisplayName} : application différée, {why}");
+                    _log.Debug($"{runtime.Pair.LogTag} : application différée, {why}");
                     continue;
                 }
 
@@ -1050,7 +1050,7 @@ public sealed class SyncEngine : IAsyncDisposable
             runtime.Session?.MarkApplied();
             _book.Seen(id);
 
-            _log.Info($"{runtime.Pair.DisplayName} : apparence appliquée.");
+            _log.Info($"{runtime.Pair.LogTag} : apparence appliquée.");
         }
         catch (OperationCanceledException)
         {
@@ -1058,7 +1058,7 @@ public sealed class SyncEngine : IAsyncDisposable
         catch (Exception e)
         {
             runtime.LastFailure = $"application en échec : {e.Message}";
-            _log.Warning($"{runtime.Pair.DisplayName} : application en échec.", e);
+            _log.Warning($"{runtime.Pair.LogTag} : application en échec.", e);
         }
     }
 
@@ -1088,7 +1088,7 @@ public sealed class SyncEngine : IAsyncDisposable
 
             RecordApplied(runtime, manifest, hash, extrasPosed);
 
-            _log.Info($"{runtime.Pair.DisplayName} : extras reposés sans redessin.");
+            _log.Info($"{runtime.Pair.LogTag} : extras reposés sans redessin.");
         }
         catch (OperationCanceledException)
         {
@@ -1096,7 +1096,7 @@ public sealed class SyncEngine : IAsyncDisposable
         catch (Exception e)
         {
             runtime.LastFailure = $"extras en échec : {e.Message}";
-            _log.Warning($"{runtime.Pair.DisplayName} : extras en échec.", e);
+            _log.Warning($"{runtime.Pair.LogTag} : extras en échec.", e);
         }
     }
 
@@ -1114,7 +1114,7 @@ public sealed class SyncEngine : IAsyncDisposable
             // revenir, et tout refaire coûterait un transfert complet.
             runtime.Session?.MarkOutOfSight();
 
-            _log.Info($"{runtime.Pair.DisplayName} : hors du champ, apparence retirée.");
+            _log.Info($"{runtime.Pair.LogTag} : hors du champ, apparence retirée.");
         }
         catch (OperationCanceledException)
         {
@@ -1122,7 +1122,7 @@ public sealed class SyncEngine : IAsyncDisposable
         catch (Exception e)
         {
             runtime.LastFailure = $"retrait en échec : {e.Message}";
-            _log.Warning($"{runtime.Pair.DisplayName} : retrait en échec.", e);
+            _log.Warning($"{runtime.Pair.LogTag} : retrait en échec.", e);
         }
     }
 
@@ -1178,7 +1178,7 @@ public sealed class SyncEngine : IAsyncDisposable
         }
         catch (Exception e)
         {
-            _log.Warning($"{runtime.Pair.DisplayName} : dialogue interrompu.", e);
+            _log.Warning($"{runtime.Pair.LogTag} : dialogue interrompu.", e);
         }
     }
 
@@ -1227,7 +1227,7 @@ public sealed class SyncEngine : IAsyncDisposable
             }
             catch (Exception e)
             {
-                _log.Warning($"{runtime.Pair.DisplayName} : retrait en échec à la fermeture.", e);
+                _log.Warning($"{runtime.Pair.LogTag} : retrait en échec à la fermeture.", e);
             }
 
             runtime.AppliedOn = null;
@@ -1280,7 +1280,7 @@ public sealed class SyncEngine : IAsyncDisposable
         runtime.NextAttempt = _clock.UtcNow + TimeSpan.FromTicks(ticks);
 
         if (failure is not null)
-            _log.Debug($"{runtime.Pair.DisplayName} : {failure}, reprise dans {TimeSpan.FromTicks(ticks).TotalSeconds:0} s.");
+            _log.Debug($"{runtime.Pair.LogTag} : {failure}, reprise dans {TimeSpan.FromTicks(ticks).TotalSeconds:0} s.");
     }
 
     public async ValueTask DisposeAsync()

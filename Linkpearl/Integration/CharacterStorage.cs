@@ -85,7 +85,9 @@ public static class CharacterStorage
             {
                 // Un fichier verrouillé n'empêche pas les autres de suivre :
                 // l'identité est le seul qui compte vraiment.
-                log($"récupération de {name} impossible : {e.Message}");
+                // Le type et non le message : celui-ci porte le chemin complet,
+                // donc le nom de session Windows de l'utilisateur.
+                log($"récupération de {name} impossible ({e.GetType().Name}).");
             }
         }
 
