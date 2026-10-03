@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using Linkpearl.Core.Crypto;
@@ -42,8 +43,17 @@ public sealed record PairRequestMessage(
     {
         var name = Encoding.UTF8.GetBytes(CharacterName);
 
+        // Coupé sur une frontière de caractère : la lecture est en UTF-8
+        // strict, et une séquence tronquée y ferait refuser tout le message.
         if (name.Length > MaxNameLength)
-            name = name[..MaxNameLength];
+        {
+            var cut = MaxNameLength;
+
+            while (cut > 0 && (name[cut] & 0xC0) == 0x80)
+                cut--;
+
+            name = name[..cut];
+        }
 
         var frame = new byte[HeaderLength + name.Length];
 
@@ -101,21 +111,63 @@ public sealed record PairRequestMessage(
         var nonce = frame.Slice(NonceOffset, NonceLength).ToArray();
         var world = BinaryPrimitives.ReadUInt16BigEndian(frame[WorldOffset..]);
 
-        // Le nom vient du réseau : on écarte tout ce qui n'est pas un nom de
-        // personnage plausible, pour qu'aucune séquence de contrôle n'atteigne
-        // l'interface.
-        var name = Encoding.UTF8.GetString(frame[HeaderLength..]);
-
-        if (name.Any(c => char.IsControl(c)))
-        {
-            rejection = "nom de personnage contenant des caractères de contrôle";
+        if (TryReadName(frame[HeaderLength..], out var name, out rejection) is false)
             return false;
-        }
 
         message = new PairRequestMessage(frame[0] == KindAccept, publicKey, nonce, ephemeral, name, world);
         rejection = null;
         return true;
     }
+
+    /// <summary>Lit le nom annoncé, sous la même règle que la demande d'admission.</summary>
+    /// <remarks>
+    /// Le nom vient du réseau et finit dans l'interface et le chat, où il
+    /// décide d'une confiance : c'est lui que le destinataire compare au
+    /// personnage devant lui. UTF-8 strict, pour qu'un octet invalide soit
+    /// refusé plutôt que remplacé par un caractère de substitution qui
+    /// masquerait l'anomalie. Contrôle (Cc) écarte retours à la ligne et
+    /// séquences d'échappement ; format (Cf) écarte les marques bidi comme
+    /// U+202E, qui inverseraient l'affichage du nom, et les caractères
+    /// invisibles qui feraient passer un nom pour un autre. Un nom fait de
+    /// blancs seuls ne désigne personne.
+    /// </remarks>
+    private static bool TryReadName(ReadOnlySpan<byte> bytes, out string name, out string? rejection)
+    {
+        name = string.Empty;
+
+        try
+        {
+            name = StrictUtf8.GetString(bytes);
+        }
+        catch (DecoderFallbackException)
+        {
+            rejection = "nom de personnage hors règles : UTF-8 invalide";
+            return false;
+        }
+
+        if (name.Any(c => char.IsControl(c)))
+        {
+            rejection = "nom de personnage hors règles : caractères de contrôle";
+            return false;
+        }
+
+        if (name.Any(c => CharUnicodeInfo.GetUnicodeCategory(c) == UnicodeCategory.Format))
+        {
+            rejection = "nom de personnage hors règles : caractères de mise en forme invisibles";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            rejection = "nom de personnage hors règles : vide";
+            return false;
+        }
+
+        rejection = null;
+        return true;
+    }
+
+    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     /// <summary>
     /// Le matériau du secret de paire : l'accord des deux éphémères, puis l'aléa.
