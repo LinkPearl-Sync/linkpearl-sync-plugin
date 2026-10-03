@@ -197,6 +197,8 @@ jobs:
     # comme une donnée, et le zip n'est jamais ouvert ici.
     permissions:
       contents: write
+      # Pour faire passer repo.json sur main par une PR.
+      pull-requests: write
       # Pour l'attestation de provenance : un jeton OIDC qui prouve à Sigstore
       # que ce workflow, sur ce commit, a produit ce zip.
       id-token: write
@@ -395,7 +397,15 @@ jobs:
           mv repo.json.new main/repo.json
           git -C main diff
 
+      # main n'accepte de changement que par une PR, et GitHub refuse
+      # GitHub Actions comme exception au ruleset. Le job ouvre donc la PR et la
+      # fusionne aussitôt : aucune approbation n'est requise, et attendre une
+      # validation humaine retarderait d'autant la version vue par les joueurs.
+      # Exige « Allow GitHub Actions to create and approve pull requests ».
       - name: Enregistrer le manifeste sur main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: publication/${{ github.ref_name }}
         run: |
           cd main
           git config user.name "github-actions[bot]"
@@ -403,10 +413,19 @@ jobs:
           git add repo.json
           git diff --staged --quiet && exit 0
           git commit -m "chore: manifeste du dépôt pour $TAG"
-          # main a pu avancer depuis l'extraction : on se replace dessus, une
-          # fois. Le groupe de concurrence écarte les autres publications, donc
-          # un conflit sur repo.json signale un humain qui l'a touché.
-          git push origin HEAD:main || { git pull --rebase origin main && git push origin HEAD:main; }
+          # Forcé : une relance après échec retrouve la branche de la tentative
+          # précédente, que ce commit remplace.
+          git push --force origin "HEAD:refs/heads/$BRANCH"
+          if [ "$(gh pr list --head "$BRANCH" --state open --json number --jq length)" = 0 ]; then
+            gh pr create --base main --head "$BRANCH" \
+              --title "chore: manifeste du dépôt pour $TAG" \
+              --body "Ouverte et fusionnée par la publication de $TAG."
+          fi
+          # main a pu avancer depuis l'extraction, ce que la fusion absorbe. Le
+          # groupe de concurrence écarte les autres publications, donc un
+          # conflit sur repo.json signale un humain qui l'a touché.
+          gh pr merge "$BRANCH" --squash --delete-branch \
+            --subject "chore: manifeste du dépôt pour $TAG" --body ""
 
       - name: Republier le site
         # Dalamud lit repo.json sur linkpearl-sync.github.io, qui en sert une
