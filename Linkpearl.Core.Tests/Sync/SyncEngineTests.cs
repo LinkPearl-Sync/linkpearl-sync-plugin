@@ -704,7 +704,7 @@ public sealed class SyncEngineTests : IDisposable
 
         world.AliceAppearance.Manifest = world.AliceAppearance.Manifest! with
         {
-            MetaManipulations = "AAAA",
+            MetaManipulations = Linkpearl.Core.Tests.Safety.Gzipped.Base64(1, "autre"),
             Extras = CharacterExtras.None with { Honorific = "{\"Title\":\"b\"}" },
         };
 

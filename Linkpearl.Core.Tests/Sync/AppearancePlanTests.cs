@@ -256,8 +256,8 @@ public class AppearancePlanTests
         var manifest = new CharacterManifest(
             CharacterManifest.CurrentVersion,
             [new FileReplacement([Top], hash, 42)],
-            Convert.ToBase64String("manipulations"u8),
-            Convert.ToBase64String("glamourer"u8));
+            Linkpearl.Core.Tests.Safety.Gzipped.Base64(1, "manipulations"),
+            Linkpearl.Core.Tests.Safety.Gzipped.Base64(6, "{}"));
 
         AppearancePlanner.TryBuild(manifest, store, Quotas.Default, out var plan, out _);
 

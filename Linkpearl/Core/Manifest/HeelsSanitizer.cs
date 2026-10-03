@@ -28,7 +28,12 @@ public static class HeelsSanitizer
 
         try
         {
-            if (JsonNode.Parse(json) is not JsonObject root)
+            // Insensible à la casse, comme SimpleHeels lit ce JSON et comme le
+            // receveur le contrôle : une variante de casse partirait sinon et
+            // ferait refuser l'apparence entière chez chaque pair.
+            var options = new JsonNodeOptions { PropertyNameCaseInsensitive = true };
+
+            if (JsonNode.Parse(json, options) is not JsonObject root)
                 return null;
 
             foreach (var name in Removed)
@@ -36,8 +41,9 @@ public static class HeelsSanitizer
 
             return root.ToJsonString();
         }
-        catch (JsonException)
+        catch (Exception e) when (e is JsonException or ArgumentException or InvalidOperationException)
         {
+            // Une clé en double à la casse près : le receveur la refuserait.
             return null;
         }
     }

@@ -53,6 +53,37 @@ public class ExtrasValidatorTests
     public void Un_titre_trop_long_ou_avec_un_controle_est_refuse(string json)
         => Assert.False(Accept(CharacterExtras.None with { Honorific = json }));
 
+    // SimpleHeels et Honorific lisent leur JSON avec Newtonsoft, insensible à
+    // la casse : une variante de casse échappait à une comparaison exacte et
+    // arrivait quand même jusqu'au plugin.
+    [Theory]
+    [InlineData("{\"title\":\"trente-trois caractères, un de trop\"}")]
+    [InlineData("{\"TITLE\":\"a\\u0007b\"}")]
+    [InlineData("{\"Title\":\"court\",\"title\":\"trente-trois caractères, un de trop\"}")]
+    public void Le_titre_se_controle_a_la_casse_pres_et_sans_doublon(string json)
+        => Assert.False(Accept(CharacterExtras.None with { Honorific = json }));
+
+    [Theory]
+    [InlineData("{\"DefaultOffset\":0.1,\"tags\":{}}")]
+    [InlineData("{\"DefaultOffset\":0.1,\"EMOTEPOSITION\":{}}")]
+    [InlineData("{\"DefaultOffset\":0.1,\"defaultoffset\":9}")]
+    public void Les_champs_des_talons_se_controlent_a_la_casse_pres(string json)
+        => Assert.False(Accept(CharacterExtras.None with { Heels = json }));
+
+    [Fact]
+    public void Un_doublon_a_la_casse_pres_est_refuse_meme_en_profondeur()
+        => Assert.False(Accept(CharacterExtras.None with { Heels = "{\"Emotes\":[{\"Offset\":1,\"offset\":2}]}" }));
+
+    [Fact]
+    public void L_emetteur_retire_les_champs_a_la_casse_pres()
+    {
+        var clean = HeelsSanitizer.Sanitize("{\"DefaultOffset\":0.1,\"tags\":{},\"emotePosition\":[1,2,3]}");
+
+        Assert.NotNull(clean);
+        Assert.True(Accept(CharacterExtras.None with { Heels = clean }));
+        Assert.DoesNotContain("tags", clean, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void Des_moodles_non_nettoyes_sont_refuses()
     {

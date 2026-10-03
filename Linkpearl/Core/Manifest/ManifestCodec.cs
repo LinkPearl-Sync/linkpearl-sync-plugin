@@ -164,59 +164,99 @@ public static class ManifestCodec
             return false;
         }
 
-        if (TryInflate(compressed, quotas.MaxManifestDecompressedBytes, out var plain, out rejection) is false)
-            return false;
+        byte[]? plain = null;
 
-        return TryParse(plain, quotas, out manifest, out rejection);
+        try
+        {
+            if (TryInflate(compressed, quotas.MaxManifestDecompressedBytes, out plain, out var length, out rejection) is false)
+                return false;
+
+            return TryParse(plain.AsMemory(0, length), quotas, out manifest, out rejection);
+        }
+        finally
+        {
+            if (plain is not null)
+                ArrayPool<byte>.Shared.Return(plain);
+        }
     }
+
+    /// <summary>Premier tampon de détente : un manifeste courant y tient sans le faire grandir.</summary>
+    private const int FirstInflateBuffer = 256 * 1024;
 
     /// <summary>
     /// Détend le flux en s'arrêtant au plafond, sans jamais faire confiance à la
     /// taille annoncée par l'émetteur.
     /// </summary>
-    private static bool TryInflate(ReadOnlySpan<byte> compressed, int cap, out byte[] plain, out string? rejection)
+    /// <param name="plain">Tampon emprunté à l'<see cref="ArrayPool{T}"/>, à rendre par l'appelant.</param>
+    /// <remarks>
+    /// Le décodeur travaille sur des spans : ni copie de l'entrée, ni
+    /// MemoryStream qui double sa capacité jusqu'au plafond. Le tampon de
+    /// sortie vient du pool et ne grandit qu'en doublant, jusqu'au plafond :
+    /// un manifeste de plusieurs Mo ne laisse pas un tableau neuf sur le LOH à
+    /// chaque réception.
+    /// </remarks>
+    private static bool TryInflate(
+        ReadOnlySpan<byte> compressed, int cap, out byte[]? plain, out int length, out string? rejection)
     {
-        plain = [];
+        using var decoder = new BrotliDecoder();
 
-        using var input = new MemoryStream(compressed.ToArray(), writable: false);
-        using var brotli = new BrotliStream(input, CompressionMode.Decompress);
-        using var output = new MemoryStream();
+        var buffer = ArrayPool<byte>.Shared.Rent(Math.Min(cap, FirstInflateBuffer));
+        var written = 0;
+        var handedOver = false;
 
-        var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
         try
         {
-            int read;
-            while ((read = brotli.Read(buffer, 0, buffer.Length)) > 0)
+            while (true)
             {
-                if (output.Length + read > cap)
+                // Jamais au-delà du plafond, même si le pool rend plus grand.
+                var room = buffer.AsSpan(written, Math.Min(buffer.Length, cap) - written);
+                var status = decoder.Decompress(compressed, room, out var consumed, out var produced);
+
+                compressed = compressed[consumed..];
+                written += produced;
+
+                switch (status)
                 {
-                    rejection = $"plafond de décompression dépassé ({cap} octets)";
-                    return false;
+                    case OperationStatus.Done:
+                        plain = buffer;
+                        length = written;
+                        rejection = null;
+                        handedOver = true;
+                        return true;
+
+                    case OperationStatus.DestinationTooSmall when written >= cap:
+                        rejection = $"plafond de décompression dépassé ({cap} octets)";
+                        break;
+
+                    case OperationStatus.DestinationTooSmall:
+                        var larger = ArrayPool<byte>.Shared.Rent((int)Math.Min((long)buffer.Length * 2, cap));
+                        buffer.AsSpan(0, written).CopyTo(larger);
+                        ArrayPool<byte>.Shared.Return(buffer);
+                        buffer = larger;
+                        continue;
+
+                    default:
+                        // Données invalides ou flux tronqué. L'entrée vient d'un
+                        // pair : toute défaillance du décodeur devient un refus,
+                        // jamais une exception qui remonterait dans la boucle de
+                        // synchronisation.
+                        rejection = "flux compressé illisible";
+                        break;
                 }
 
-                output.Write(buffer, 0, read);
+                plain = null;
+                length = 0;
+                return false;
             }
-        }
-        catch (Exception e) when (e is InvalidDataException or InvalidOperationException or IOException)
-        {
-            // Brotli signale une entrée corrompue par InvalidOperationException et
-            // non par InvalidDataException. L'entrée vient d'un pair : toute
-            // défaillance du décodeur devient un refus, jamais une exception qui
-            // remonterait dans la boucle de synchronisation.
-            rejection = "flux compressé illisible";
-            return false;
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(buffer);
+            if (handedOver is false)
+                ArrayPool<byte>.Shared.Return(buffer);
         }
-
-        plain = output.ToArray();
-        rejection = null;
-        return true;
     }
 
-    private static bool TryParse(byte[] plain, Quotas quotas, out CharacterManifest? manifest, out string? rejection)
+    private static bool TryParse(ReadOnlyMemory<byte> plain, Quotas quotas, out CharacterManifest? manifest, out string? rejection)
     {
         manifest = null;
 

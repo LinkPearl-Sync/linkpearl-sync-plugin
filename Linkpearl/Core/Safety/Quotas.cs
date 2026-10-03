@@ -26,6 +26,19 @@ public sealed record Quotas
     /// <summary>Taille d'un blob transféré.</summary>
     public long MaxBlobBytes { get; init; } = 128L * 1024 * 1024;
 
+    /// <summary>
+    /// Somme des tailles des blobs distincts d'un manifeste.
+    /// </summary>
+    /// <remarks>
+    /// Une apparence moyenne pèse environ 800 Mo, selon l'utilisateur (voir
+    /// docs/reprise.md), et celle qui sert aux mesures du faux pair 405 Mo.
+    /// Cinq fois la moyenne laisse passer les tenues les plus lourdes ;
+    /// au-delà, c'est un pair qui veut remplir notre disque. Le moteur y
+    /// ajoute un plafond relatif au quota du cache, que le validateur ne
+    /// connaît pas.
+    /// </remarks>
+    public long MaxManifestTotalBytes { get; init; } = 4L * 1024 * 1024 * 1024;
+
     /// <summary>Taille d'un manifeste tel qu'il arrive sur le réseau.</summary>
     public int MaxManifestCompressedBytes { get; init; } = 1024 * 1024;
 
@@ -35,14 +48,51 @@ public sealed record Quotas
     /// <remarks>
     /// Un pair peut envoyer un mégaoctet qui se détend en plusieurs gigaoctets.
     /// La lecture s'arrête ici plutôt que de remplir la mémoire du processus du jeu.
+    ///
+    /// Le plus gros manifeste honnête que les autres plafonds laissent passer
+    /// pèse 4,7 Mo encodé : 2 000 entrées et 6 000 échanges de deux chemins,
+    /// tous de 256 caractères, la méta, l'état Glamourer et chaque extra à son
+    /// plafond (mesuré par
+    /// <c>Le_plus_gros_manifeste_honnete_tient_sous_le_plafond_de_detente</c>).
+    /// Un manifeste réel en est très loin : quelques centaines de Kio. Seul un
+    /// manifeste hostile, qui ferait échapper chaque caractère de ses chaînes,
+    /// dépasse ces 5 Mio, et il serait refusé de toute façon.
     /// </remarks>
-    public int MaxManifestDecompressedBytes { get; init; } = 16 * 1024 * 1024;
+    public int MaxManifestDecompressedBytes { get; init; } = 5 * 1024 * 1024;
 
     /// <summary>Chaîne de manipulations méta de Penumbra, opaque pour nous.</summary>
+    /// <remarks>
+    /// Gardé tel quel faute de mesure : aucune capture réelle n'a encore été
+    /// relevée, et un plafond trop bas ferait disparaître un pair entier. La
+    /// détente, elle, est bornée par <see cref="MaxMetaManipulationsDecompressedBytes"/>.
+    /// </remarks>
     public int MaxMetaManipulationChars { get; init; } = 512 * 1024;
+
+    /// <summary>
+    /// Manipulations méta une fois détendues.
+    /// </summary>
+    /// <remarks>
+    /// Penumbra les détend sans plafond, sur le thread du jeu, à chaque
+    /// AddTemporaryMod. Une manipulation tient en une vingtaine d'octets dans
+    /// le format binaire (version 1), en une centaine dans l'ancien format
+    /// JSON (version 0) : 4 Mio laissent la place à des dizaines de milliers,
+    /// quand un personnage en porte quelques centaines.
+    /// </remarks>
+    public int MaxMetaManipulationsDecompressedBytes { get; init; } = 4 * 1024 * 1024;
 
     /// <summary>Chaîne d'état de Glamourer, opaque pour nous.</summary>
     public int MaxGlamourerStateChars { get; init; } = 64 * 1024;
+
+    /// <summary>
+    /// État Glamourer une fois détendu.
+    /// </summary>
+    /// <remarks>
+    /// Un design JSON : équipement, apparence, et les teintures avancées, qui
+    /// en sont la plus grosse part avec quelques centaines d'octets par ligne
+    /// de table de couleurs. 2 Mio, c'est des milliers de lignes de plus que ce
+    /// qu'un personnage peut porter.
+    /// </remarks>
+    public int MaxGlamourerStateDecompressedBytes { get; init; } = 2 * 1024 * 1024;
 
     /// <summary>Profil Customize+, JSON des os : de 1 à 15 Kio relevés, marge large.</summary>
     public int MaxCustomizePlusChars { get; init; } = 64 * 1024;
