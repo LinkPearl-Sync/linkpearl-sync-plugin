@@ -17,7 +17,7 @@
 
     <!-- DPAPI. Windows uniquement, donc surtout pas dans Core.Deps.props, que
          les tests importent et qui doivent tourner sous Linux. -->
-    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
   </ItemGroup>
 
   <!-- Fredoka pour les titres et Nunito pour le texte, les polices du site,
