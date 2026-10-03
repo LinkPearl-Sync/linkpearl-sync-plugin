@@ -85,14 +85,34 @@ service, en clair. Il en découle :
 
 | Adversaire | Peut | Ne peut pas |
 |---|---|---|
-| Observateur du réseau | voir les adresses IP, les tailles, les horaires | lire une session, usurper une identité |
+| Observateur du réseau | en passif, voir les adresses IP, les tailles, les horaires, et **tout ce qui passe par le rendez-vous** : la liaison avec lui est en TCP nu, sans TLS, donc demandes de pairage, noms, mondes et clés publiques s'y lisent comme le service les lit | lire une session, usurper une identité |
+| Attaquant actif sur le réseau, entre un joueur et son service | **tout ce que peut un rendez-vous malveillant**, ci-dessous : sans TLS, rien ne distingue ses trames de celles du service, il peut donc s'intercaler dans un pairage qui passe par lui | lire une session, agir sur une paire déjà épinglée |
+| Client quelconque qui connaît `nom@monde` d'un joueur, **sur un service à jour** | réclamer la boîte personnelle de ce joueur **avant lui** (en ligne avant lui, ou pour une fenêtre à venir, dont l'adresse se calcule d'avance) : il lit alors ses demandes de pairage et peut y répondre. Le titulaire en est averti (chat et interface), et une seconde réponse à la même demande fait annuler le pairage | ouvrir une boîte déjà réclamée par son titulaire, ni la lire en même temps que lui |
+| Le même, **sur un service d'avant la réclamation exclusive** | ouvrir la boîte en même temps que son titulaire, lire ses demandes et répondre à sa place ; si la vraie réponse arrive aussi dans les dix minutes, le pairage est annulé | conclure un pairage au nom d'un joueur qui n'est pas visible du demandeur |
 | Rendez-vous honnête mais curieux, ayant vu passer le pairage | savoir quels personnages se sont pairés | calculer le secret de paire, qui vient d'un accord éphémère ; lire une session |
-| Rendez-vous malveillant, **au moment du pairage** | substituer sa propre clé des deux côtés et s'intercaler dans toutes les sessions suivantes de cette paire | agir sur une paire formée ailleurs |
+| Rendez-vous malveillant, **au moment du pairage** | substituer sa propre clé des deux côtés et s'intercaler dans toutes les sessions suivantes de cette paire ; ignorer la réclamation exclusive et livrer les demandes à qui il veut | agir sur une paire formée ailleurs |
 | Rendez-vous malveillant, **après le pairage** | refuser le service, mentir sur une adresse, relayer ou non | faire accepter une autre identité : la clé est épinglée dans le carnet |
 | Service malveillant du **réseau ouvert** | refuser, mentir sur une annonce, observer qui relaie avec qui | voir une clé, s'intercaler dans un pairage : il ne porte que des pairs épinglés |
 
 C'est donc une **confiance au premier contact** (TOFU), dont le premier contact
-passe par le serveur. Pour un membre de groupe, ce premier contact n'est pas le
+passe par le serveur.
+
+**Avant la réclamation exclusive des boîtes (octobre 2026), n'importe quel
+client pouvait s'intercaler au pairage**, sans être le service : l'adresse de
+la boîte personnelle dérive de `nom@monde`, public, et rien n'empêchait de
+l'ouvrir en même temps que son titulaire. La première acceptation portant le
+bon aléa l'emportait, et le nom annoncé était épinglé sur la clé de l'intrus.
+Depuis, trois garde-fous, dont aucun ne retire au service son pouvoir :
+
+- **La boîte personnelle est exclusive sur un service à jour** (`MailboxClaim`,
+  voir [Pairage](#pairage)). Il reste deux trous : quelqu'un qui la réclame
+  avant son titulaire, qui est alors averti, et un service ancien ou
+  malveillant, qui ne garantit rien.
+- **Une acceptation ne conclut que si l'expéditeur annoncé, nom et monde, est
+  visible** du demandeur au moment où elle est traitée.
+- **L'aléa d'une demande reste surveillé dix minutes** après la première
+  acceptation : une seconde, sous une autre clé, fait retirer le pair ajouté
+  par la première, et le demandeur est invité à redemander en face à face. Pour un membre de groupe, ce premier contact n'est pas le
 pairage mais le premier handshake avec lui, et il reste gagnable par qui arrive
 avant le vrai : voir [Groupes (noyau)](#groupes-noyau). Pour un cercle qui héberge son propre service,
 l'opérateur est l'un d'eux, et c'est assumé dans `pairage.md`. Pour le service
@@ -111,7 +131,7 @@ proposée, par décision : les joueurs ne se parlent pas hors du jeu.
 | Service qui s'intercale, ou porteur du code qui devance les membres, **en mode mot de passe** | se faire passer pour un membre et obtenir une étiquette liée au mot de passe, attaquable par dictionnaire hors ligne ; un mot de passe faible tombe, et avec lui l'entrée dans le vrai groupe, donc le secret | lire le mot de passe en clair dans la preuve, ni sa longueur |
 | Le même, **en mode validation** | substituer sa propre clé et son propre éphémère dans la demande, ou déposer sous le nom d'un autre : le modérateur approuve un nom affiché, et la bienvenue, donc le secret, va à qui a déposé | faire entrer quelqu'un sans qu'un modérateur approuve |
 | Le même, face au candidat | le faire entrer dans un **faux groupe** en répondant avant les membres : le candidat n'a aucune ancre vers la clé du vrai groupe ; le nom affiché à l'entrée le trahit s'il diffère de celui qu'on lui a annoncé | falsifier un groupe déjà rejoint : sa clé est fixée à l'entrée, et toute politique doit s'y vérifier |
-| Qui connaît `nom@monde` du candidat | lire dans sa boîte personnelle les défis et la bienvenue scellée, y déposer des refus | ouvrir la bienvenue, produire la preuve |
+| Qui connaît `nom@monde` du candidat | y déposer des refus ; lire dans sa boîte personnelle les défis et la bienvenue scellée s'il l'a réclamée avant lui, ou sur un service d'avant la réclamation exclusive | ouvrir la bienvenue, produire la preuve |
 
 Tout ce qu'apprend ainsi un intrus au premier contact, secret du groupe
 compris, lui ouvre ensuite les boîtes de présence et les secrets de paire de
@@ -154,6 +174,30 @@ empreinte = empreinte de nom@monde                             voir PlayerFinger
 adresse   = SHA-256("linkpearl:mbox:v1" || empreinte || fenetre(8))[tronquée]
 ```
 
+**La boîte est réclamée, pas seulement ouverte.** Le client envoie
+`MailboxClaim` (0x1D) pour ses propres boîtes, la personnelle et celles de
+présence de ses groupes, toutes dérivées de son empreinte ; le service répond
+`MailboxClaimed` (0x1E), un bit par adresse, levé si la boîte est désormais à
+cette seule connexion, baissé si une autre la tient déjà. Un `MailboxOpen`
+d'une autre connexion sur une boîte réclamée est ignoré. Les boîtes
+d'admission d'un groupe, que tiennent ensemble tous ses modérateurs, restent
+ouvertes par `MailboxOpen`.
+
+- Un bit baissé sur la boîte personnelle est redemandé chaque minute. Après
+  deux échecs d'affilée (le service peut tenir encore, le temps de s'en
+  apercevoir, notre propre connexion d'avant une coupure), le joueur est
+  averti une fois dans le chat, et l'interface le dit tant que cela dure.
+- Un service d'avant répond « trame inattendue » et coupe : le client se
+  reconnecte, ouvre ses boîtes par `MailboxOpen` comme avant, sans
+  exclusivité, et ne réessaie la réclamation sur ce service que six heures
+  plus tard.
+
+**Seuls les services des réglages portent le pairage.** Un service connu par
+la seule politique d'un groupe, choisi par un modérateur, ne reçoit que les
+boîtes de ce groupe : ni boîte personnelle (sauf pendant une candidature dont
+il porte le code, puisque la réponse du groupe y arrive), ni interrogation de
+détection, ni demande de pairage.
+
 Le demandeur dépose dans la boîte de la cible, **sur tous les services de sa
 propre liste** puisqu'il ignore lequel la cible emploie :
 
@@ -168,6 +212,30 @@ en mémoire seulement : un plugin rechargé entre la demande et la réponse ne p
 plus conclure, et il faut redemander. `ephB` est tiré à l'acceptation. Les types
 `0x01` et `0x02`, ceux de la version 1 sans éphémère, sont refusés avec un motif
 lisible.
+
+Le nom suit la règle de la demande d'admission : UTF-8 strict, aucun caractère
+de contrôle (Cc) ni de mise en forme (Cf), pas un nom fait seulement de blancs.
+Un message qui la viole est refusé en entier.
+
+Ce que le demandeur fait d'une réponse (`Core/Sync/OutgoingPairRequests.cs`) :
+
+- elle n'est retenue que si elle porte l'aléa d'une demande en attente vers le
+  personnage qu'elle annonce ;
+- elle ne conclut que si ce personnage, nom et monde, est **visible** au moment
+  où elle est traitée ; sinon elle est ignorée, la demande reste ouverte, et le
+  joueur en est averti ;
+- l'aléa reste surveillé **dix minutes** après la première réponse qui conclut.
+  Une seconde réponse sous une autre clé retire le pair ajouté par la première,
+  et le joueur lit qu'il faut redemander en face à face : rien ne dit laquelle
+  des deux était la bonne.
+
+Ce que le destinataire fait d'une demande (`Core/Sync/PairRequestInbox.cs`) :
+une seule en attente par expéditeur, clé ou personnage annoncé, la dernière
+remplaçant l'autre ; vingt au plus, les suivantes jetées ; dix minutes de vie ;
+une mémoire des aléas vus bornée et purgée. Une demande d'un pair bloqué au
+carnet est ignorée. Accepter n'est possible que si le demandeur, nom et monde,
+est visible, et l'interface prévient quand accepter remplacerait un pairage du
+carnet, même clé ou même personnage.
 
 Le secret de paire :
 
@@ -1107,7 +1175,14 @@ Par ordre d'importance.
    de le détecter.** La clé publique arrive par lui, en clair. Voir
    [Modèle de confiance](#modèle-de-confiance). Aucune vérification hors bande
    n'est proposée : c'est une limite d'authentification, pas seulement de
-   confidentialité.
+   confidentialité. **Il n'y a pas de TLS vers le rendez-vous** : un attaquant
+   actif sur le chemin réseau d'un joueur a donc les mêmes pouvoirs que lui.
+   Jusqu'en octobre 2026, **n'importe quel client** pouvait aussi s'intercaler,
+   en ouvrant la boîte personnelle de la cible ; sur un service à jour, elle
+   est désormais exclusive, mais qui la réclame avant son titulaire lit encore
+   ses demandes (le titulaire est averti), et un service ancien ne garantit
+   aucune exclusivité. La visibilité exigée et la surveillance des réponses
+   réduisent ces cas, elles ne les ferment pas.
 2. **L'admission dans un groupe privé hérite de cette limite** : le
    candidat ne peut pas reconnaître le vrai groupe, un modérateur approuve un
    nom affiché, et un faux défieur obtient de quoi attaquer le mot de passe
