@@ -121,5 +121,33 @@ public sealed record GroupRecord
     public bool Refuses(PeerId? key, PlayerFingerprint? member)
         => Policy?.IsBanned(key, member) is true || Blocked.Any(ban => ban.Matches(key, member));
 
+    /// <summary>
+    /// Vrai si la politique courante nous exclut de ce groupe.
+    /// </summary>
+    /// <remarks>
+    /// Un état qu'on déduit de la politique, jamais un drapeau enregistré : une
+    /// politique plus récente qui lève le bannissement nous réintègre sans
+    /// rien d'autre à défaire, et le carnet sur disque n'a pas à changer de
+    /// forme. Un groupe dissous n'exclut plus personne : il se retire.
+    /// </remarks>
+    public bool Excludes(PeerId? ourKey, PlayerFingerprint? ourFingerprint)
+        => Policy is { Dissolved: false } policy && policy.IsBanned(ourKey, ourFingerprint);
+
+    /// <summary>
+    /// La clé qui tient ce personnage, ou null s'il attend un premier contact.
+    /// </summary>
+    /// <remarks>
+    /// Une clé qu'on a bloquée ne tient plus le personnage sous lequel elle
+    /// s'était épinglée : bloquée avec lui, c'est le personnage qui refuse ;
+    /// bloquée seule, après qu'on a débloqué le personnage, elle le laisse à
+    /// la prochaine clé qui se présente (voir <see cref="GroupBook.Unblock"/>).
+    /// </remarks>
+    public PeerId? LivePin(GroupMember? member)
+        => member?.Id is { } pinned && Blocked.Any(ban => ban.Peer == pinned) is false ? pinned : null;
+
+    /// <summary>Le membre dont la clé épinglée est celle-ci, s'il y en a un.</summary>
+    public GroupMember? MemberPinnedTo(PeerId key)
+        => Members.Values.FirstOrDefault(member => member.Id == key);
+
     public TransientCategories ReceiveOf(GroupMember? member) => member?.Receive ?? DefaultReceive;
 }

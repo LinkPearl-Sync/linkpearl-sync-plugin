@@ -119,7 +119,12 @@ internal sealed class GroupsPage(
 
     private const string PublicWarning =
         "Le Mode public partage votre apparence avec tous les joueurs visibles qui l'ont activé, "
-      + "même si vous ne les connaissez pas.";
+      + "même si vous ne les connaissez pas. Linkpearl ne peut pas prouver qu'un inconnu est bien "
+      + "le personnage qu'il affiche : bloquez une apparence qui vous semble usurpée.";
+
+    private const string ExcludedNotice =
+        "Ce personnage a été exclu du groupe. Le groupe reste listé, sans partage d'apparence, "
+      + "au cas où l'exclusion serait levée.";
 
     /// <summary>Vrai tant que l'avertissement attend sa réponse, avant la première activation.</summary>
     private bool _publicWarningOpen;
@@ -262,12 +267,22 @@ internal sealed class GroupsPage(
         {
             using var scope = ImRaii.PushId(index);
 
-            var name = ban.Fingerprint is { } print && @public.Members.TryGetValue(print, out var member)
-                ? Glyphs.Safe(member.DisplayName)
-                : "joueur bloqué";
+            // Une clé bloquée seule reste du premier temps d'un déblocage :
+            // son personnage est libre, elle ne se nomme donc plus par lui.
+            var name = ban switch
+            {
+                { Fingerprint: { } print } when @public.Members.TryGetValue(print, out var member)
+                    => Glyphs.Safe(member.DisplayName),
+                { Fingerprint: null } => "identité Linkpearl bloquée",
+                _ => "joueur bloqué",
+            };
 
             ImGui.AlignTextToFramePadding();
             Text.Body(name);
+
+            if (ban.Fingerprint is null)
+                Feedback.TooltipOnHover(
+                    "Celle qui se présentait sous un personnage débloqué. La débloquer la laisse revenir sous n'importe quel personnage.");
 
             // Calé à droite, comme « Lever » dans la liste des exclus.
             ImGui.SameLine(0f, Theme.S(Theme.GapS));
@@ -325,15 +340,20 @@ internal sealed class GroupsPage(
         var policy = group.Policy;
         var dissolved = policy is { Dissolved: true };
 
+        // Exclu, on ne montre que l'état : la liste des membres et la gestion
+        // appartiennent à un groupe dont on ne fait plus partie, tant qu'une
+        // politique plus récente ne nous a pas réintégrés.
+        var excluded = actions.IsExcluded(group);
+
         // Sans politique, un modérateur n'est pas encore reconnu comme tel :
         // RoleOf rend alors « membre », et rien de la gestion n'est proposé.
-        var manages = role is not GroupRole.Member && policy is not null && dissolved is false;
+        var manages = role is not GroupRole.Member && policy is not null && dissolved is false && excluded is false;
 
         // L'identifiant du groupe, jamais son nom : la carte garderait sinon
         // sa hauteur mémorisée d'un renommage à l'autre, et ses widgets
         // changeraient d'identifiant. Card.Begin pousse aussi cet identifiant
         // dans la pile d'ImGui, ce qui isole les boutons d'un groupe à l'autre.
-        using var card = Card.Begin($"group_{id}", accent: dissolved ? Theme.Danger : null);
+        using var card = Card.Begin($"group_{id}", accent: dissolved || excluded ? Theme.Danger : null);
 
         // L'état est fixé à la première image où le groupe paraît, puis
         // mémorisé : recalculé à chaque image, l'arrivée d'un troisième groupe
@@ -344,7 +364,7 @@ internal sealed class GroupsPage(
             _expanded[group.Id] = expanded;
         }
 
-        if (DrawHeader(group, role, policy, known, expanded))
+        if (DrawHeader(group, role, policy, known, expanded, excluded))
         {
             expanded = !expanded;
             _expanded[group.Id] = expanded;
@@ -352,6 +372,15 @@ internal sealed class GroupsPage(
 
         if (expanded is false)
             return;
+
+        if (excluded)
+        {
+            ImGui.Dummy(Theme.S(0f, Theme.GapS));
+            Text.Small(ExcludedNotice, Theme.TextFaint);
+            ImGui.Dummy(Theme.S(0f, Theme.GapM));
+            DrawFooter(group, role, dissolved, manages);
+            return;
+        }
 
         if (manages && GroupGovernance.CodeOf(group) is { } code)
             DrawInvite(group, policy!, code);
@@ -381,7 +410,7 @@ internal sealed class GroupsPage(
     /// donc il ne vole aucun clic.
     /// </remarks>
     private static bool DrawHeader(GroupRecord group, GroupRole role, GroupPolicy? policy,
-                                   IReadOnlyList<PeerStatus> known, bool expanded)
+                                   IReadOnlyList<PeerStatus> known, bool expanded, bool excluded)
     {
         var start = ImGui.GetCursorScreenPos();
         var width = ImGui.GetContentRegionAvail().X - Card.RightInset;
@@ -406,9 +435,9 @@ internal sealed class GroupsPage(
 
         // Les puces s'alignent sous le nom, pas sous le chevron.
         ImGui.Indent(gutter);
-        DrawChips(group, role, policy);
+        DrawChips(group, role, policy, excluded);
 
-        if (expanded is false)
+        if (expanded is false && excluded is false)
             DrawOnlineSummary(group, known);
 
         ImGui.Unindent(gutter);
@@ -452,8 +481,14 @@ internal sealed class GroupsPage(
     }
 
     /// <summary>Rôle, taille, mode d'entrée et état du groupe, d'un coup d'œil.</summary>
-    private static void DrawChips(GroupRecord group, GroupRole role, GroupPolicy? policy)
+    private static void DrawChips(GroupRecord group, GroupRole role, GroupPolicy? policy, bool excluded)
     {
+        if (excluded)
+        {
+            Chip.Draw("exclu", Theme.Danger, Icons.Blocked);
+            return;
+        }
+
         var (label, icon) = role switch
         {
             GroupRole.Owner     => ("propriétaire", Icons.Verified),

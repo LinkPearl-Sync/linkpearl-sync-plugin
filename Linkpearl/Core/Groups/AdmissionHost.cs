@@ -24,7 +24,8 @@ public sealed record PendingValidation(
 /// </remarks>
 public sealed class AdmissionHost(
     GroupBook book, Func<byte[]?> ourIdentityKey, IClock clock,
-    Func<AdmissionRequest, PlayerFingerprint, bool>? refuses = null) : IDisposable
+    Func<AdmissionRequest, PlayerFingerprint, bool>? refuses = null,
+    Func<PlayerFingerprint?>? ourFingerprint = null) : IDisposable
 {
     /// <summary>Au-delà, on répond « trop d'essais » sans vérifier.</summary>
     /// <remarks>
@@ -107,7 +108,10 @@ public sealed class AdmissionHost(
             {
                 Prune();
 
+                // Ce qu'on ne peut plus trancher ne se propose plus : Approve
+                // le refuserait de toute façon (voir StillValidates).
                 return [.. _pending.Values
+                    .Where(waiting => book.Find(waiting.Group) is { } group && StillValidates(group, waiting))
                     .OrderBy(waiting => waiting.LastSeen)
                     .Select(waiting => new PendingValidation(
                         waiting.Group, book.Find(waiting.Group)?.Name ?? "?", waiting.Request.Nonce,
@@ -309,25 +313,46 @@ public sealed class AdmissionHost(
         }
     }
 
+    /// <summary>Valide une demande en attente, si on peut encore la valider.</summary>
+    /// <remarks>
+    /// Tout se revérifie au moment du clic, comme dans <see cref="OnProof"/> :
+    /// la demande a pu attendre des minutes, et la politique changer entre-temps.
+    /// Un modérateur retiré, un groupe repassé en mot de passe ou un code
+    /// renouvelé ne valident plus rien, sans quoi un ancien modérateur ferait
+    /// encore entrer qui il veut par les demandes restées en attente chez lui.
+    /// </remarks>
     public AdmissionOutbound? Approve(byte[] nonce)
     {
-        // Le bannissement a pu tomber pendant que la demande attendait.
         if (TakePending(nonce) is not { } waiting
-            || book.Find(waiting.Group) is not { Policy: { Dissolved: false } policy } group
-            || policy.IsBanned(PeerId.Of(waiting.Request.PublicKey), waiting.Candidate))
+            || book.Find(waiting.Group) is not { } group
+            || StillValidates(group, waiting) is false)
             return null;
 
         using var ephemeral = CryptoPrimitives.GenerateEphemeral();
         return Welcome(waiting.Request, group, ephemeral);
     }
 
+    /// <summary>Refuse une demande en attente, aux mêmes conditions que la valider.</summary>
+    /// <remarks>Un refus parle aussi au nom du groupe : un modérateur retiré n'a plus à le donner.</remarks>
     public AdmissionOutbound? Decline(byte[] nonce)
     {
-        if (TakePending(nonce) is not { } waiting || book.Find(waiting.Group) is not { } group)
+        if (TakePending(nonce) is not { } waiting
+            || book.Find(waiting.Group) is not { } group
+            || StillValidates(group, waiting) is false)
             return null;
 
         return Refuse(waiting.Request, group, RefusalReason.Declined);
     }
+
+    /// <summary>Vrai si l'on peut encore trancher cette demande, sur la politique courante.</summary>
+    /// <remarks>Le bannissement du candidat a pu tomber pendant qu'elle attendait.</remarks>
+    private bool StillValidates(GroupRecord group, Waiting waiting)
+        => CanAdmit(group)
+           && group.Policy is { } policy
+           && policy.Attestation.Admission == AdmissionMode.Validation
+           && GroupGovernance.RoleOf(group, ourIdentityKey()) is not GroupRole.Member
+           && policy.Code.AsSpan().SequenceEqual(waiting.Request.Code)
+           && policy.IsBanned(PeerId.Of(waiting.Request.PublicKey), waiting.Candidate) is false;
 
     private Waiting? TakePending(byte[] nonce)
     {
@@ -347,10 +372,25 @@ public sealed class AdmissionHost(
     private GroupRecord? Admitting(byte[] code)
         => book.All.FirstOrDefault(group => CanAdmit(group) && group.Policy!.Code.AsSpan().SequenceEqual(code));
 
+    /// <remarks>
+    /// Un exclu garde le groupe en attendant qu'une politique plus récente le
+    /// réintègre, et garde donc son code et son mot de passe : il n'admet
+    /// personne pour autant, sans quoi l'exclusion se contournerait en
+    /// faisant entrer un autre personnage.
+    /// </remarks>
     private bool CanAdmit(GroupRecord group)
-        => group is { OwnerKey: not null, Policy: { Dissolved: false } policy }
-           && (policy.Attestation.Admission == AdmissionMode.Password
-               || GroupGovernance.RoleOf(group, ourIdentityKey()) is not GroupRole.Member);
+    {
+        if (group is not { OwnerKey: not null, Policy: { Dissolved: false } policy })
+            return false;
+
+        var ours = ourIdentityKey();
+
+        if (group.Excludes(ours is null ? null : PeerId.Of(ours), ourFingerprint?.Invoke()))
+            return false;
+
+        return policy.Attestation.Admission == AdmissionMode.Password
+               || GroupGovernance.RoleOf(group, ours) is not GroupRole.Member;
+    }
 
     private static bool SameRequest(AdmissionRequest kept, AdmissionRequest incoming)
         => kept.Code.AsSpan().SequenceEqual(incoming.Code)

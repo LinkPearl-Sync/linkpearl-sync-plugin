@@ -570,6 +570,95 @@ public sealed class AdmissionTests : IDisposable
         Assert.Null(host.Approve(pending.Nonce));
     }
 
+    /// <summary>Un modérateur et son hôte, et le carnet du propriétaire qui le nomme.</summary>
+    private (AdmissionHost Host, GroupBook Book, GroupBook OwnerBook, CreatedGroup Created) Moderator(ECDsa moderator)
+    {
+        var created = GroupGovernance.Create("Compagnie", "", PolicyFixture.Service, OwnerPoint, _clock.UtcNow);
+        var id = created.Record.Id;
+        var point = CryptoPrimitives.ExportPublicPoint(moderator);
+
+        var ownerBook = new GroupBook(_clock);
+        ownerBook.Load([created.Record]);
+        var named = GroupGovernance.SetModerators(ownerBook.Find(id)!, [point]);
+        Assert.Equal(PolicyOffer.Adopted, ownerBook.OfferPolicy(id, named));
+
+        var book = new GroupBook(_clock);
+        book.Load([created.Record with { SigningKey = null }]);
+        Assert.Equal(PolicyOffer.Adopted, book.OfferPolicy(id, named));
+
+        var host = new AdmissionHost(book, () => point, _clock);
+        _disposables.Add(host);
+        return (host, book, ownerBook, created);
+    }
+
+    [Fact]
+    public void Un_moderateur_retire_ne_valide_plus_une_demande_restee_en_attente()
+    {
+        using var moderator = CryptoPrimitives.GenerateIdentity();
+        var (host, book, ownerBook, created) = Moderator(moderator);
+        var id = created.Record.Id;
+
+        host.OnRequest(Decode<AdmissionRequest>(Start(NewCandidate(), created, "")), Candidate);
+        var pending = Assert.Single(host.Pending);
+
+        var demoted = GroupGovernance.SetModerators(ownerBook.Find(id)!, []);
+        Assert.Equal(PolicyOffer.Adopted, book.OfferPolicy(id, demoted));
+
+        Assert.Empty(host.Pending);
+        Assert.Null(host.Approve(pending.Nonce));
+    }
+
+    [Fact]
+    public void Un_code_renouvele_pendant_l_attente_ne_valide_plus_la_demande()
+    {
+        var (host, book, created) = Member(password: "", asOwner: true);
+        host.OnRequest(Decode<AdmissionRequest>(Start(NewCandidate(), created, "")), Candidate);
+        var pending = Assert.Single(host.Pending);
+
+        Assert.Equal(PolicyOffer.Adopted, book.OfferPolicy(created.Record.Id,
+            GroupGovernance.NewCode(book.Find(created.Record.Id)!, null)));
+
+        Assert.Null(host.Approve(pending.Nonce));
+    }
+
+    [Fact]
+    public void Un_passage_en_mot_de_passe_pendant_l_attente_ne_valide_plus_la_demande()
+    {
+        // En mot de passe, tout membre admet : une validation sans preuve y
+        // ferait entrer sans mot de passe.
+        var (host, book, created) = Member(password: "", asOwner: true);
+        host.OnRequest(Decode<AdmissionRequest>(Start(NewCandidate(), created, "")), Candidate);
+        var pending = Assert.Single(host.Pending);
+
+        var withPassword = GroupGovernance.SetPassword(book.Find(created.Record.Id)!, "lune", null);
+        Assert.Equal(PolicyOffer.Adopted, book.OfferPolicy(created.Record.Id, withPassword));
+        Assert.Equal(PolicyOffer.Adopted, book.OfferPolicy(created.Record.Id,
+            GroupGovernance.SetAdmission(book.Find(created.Record.Id)!, AdmissionMode.Password)));
+
+        Assert.Null(host.Approve(pending.Nonce));
+    }
+
+    [Fact]
+    public void Un_membre_exclu_n_admet_personne()
+    {
+        using var member = CryptoPrimitives.GenerateIdentity();
+        var point = CryptoPrimitives.ExportPublicPoint(member);
+        var created = GroupGovernance.Create("Compagnie", "lune", PolicyFixture.Service, OwnerPoint, _clock.UtcNow);
+        var id = created.Record.Id;
+
+        var book = new GroupBook(_clock);
+        book.Load([created.Record with { SigningKey = null }]);
+        using var host = new AdmissionHost(book, () => point, _clock);
+        Assert.Single(host.AdmissionCodes);
+
+        var ban = GroupGovernance.Ban(created.Record, new GroupBan(PeerId.Of(point), null), null);
+        Assert.Equal(PolicyOffer.Adopted, book.OfferPolicy(id, ban));
+
+        Assert.NotNull(book.Find(id));
+        Assert.Empty(host.AdmissionCodes);
+        Assert.Empty(host.OnRequest(Decode<AdmissionRequest>(Start(NewCandidate(), created, "lune")), Candidate));
+    }
+
     [Fact]
     public void La_remise_a_zero_oublie_defis_et_attentes_sans_fermer_l_hote()
     {

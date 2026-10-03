@@ -63,6 +63,10 @@ public sealed class GroupActions
     /// <summary>Bloque un membre chez soi, par son personnage et sa clé épinglée.</summary>
     public required Action<GroupId, PlayerFingerprint> Block { get; init; }
 
+    /// <summary>
+    /// Lève un blocage. Un blocage qui porte le personnage et la clé se lève
+    /// en deux temps : le personnage d'abord, la clé restant bloquée seule.
+    /// </summary>
     public required Action<GroupId, GroupBan> Unblock { get; init; }
 
     /// <summary>Les effets acceptés des membres qu'on n'a pas réglés un par un.</summary>
@@ -70,4 +74,7 @@ public sealed class GroupActions
 
     /// <summary>Notre clé d'identité publique, point de 65 octets, pour calculer notre rôle.</summary>
     public required Func<byte[]?> OurIdentityKey { get; init; }
+
+    /// <summary>Vrai si la politique du groupe exclut le personnage connecté.</summary>
+    public required Func<GroupRecord, bool> IsExcluded { get; init; }
 }

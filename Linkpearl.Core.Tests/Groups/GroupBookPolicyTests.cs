@@ -49,7 +49,7 @@ public sealed class GroupBookPolicyTests : IDisposable
         book.Load([group]);
 
         var adopted = new List<GroupId>();
-        book.PolicyAdopted += adopted.Add;
+        book.PolicyAdopted += (id, _) => adopted.Add(id);
 
         Assert.Equal(PolicyOffer.Adopted, book.OfferPolicy(group.Id, GroupPolicyCodec.Encode(PolicyV(2, name: "Nouvelle"))));
         Assert.Equal("Nouvelle", book.Find(group.Id)!.Name);
@@ -225,6 +225,92 @@ public sealed class GroupBookPolicyTests : IDisposable
 
         Assert.Equal(PolicyOffer.Same, book.OfferPolicy(group.Id, GroupPolicyCodec.Encode(second)));
         Assert.Equal(first.Signature, book.Find(group.Id)!.Policy!.Signature);
+    }
+
+    [Fact]
+    public void Une_politique_qui_nous_exclut_garde_le_groupe_jusqu_a_ce_qu_une_plus_recente_nous_reintegre()
+    {
+        // Un modérateur hostile qui bannit tout le monde ne doit pas dissoudre
+        // le groupe de fait : le groupe et son secret restent, exclus, et la
+        // politique suivante du propriétaire nous rattrape.
+        using var self = CryptoPrimitives.GenerateIdentity();
+        var ourKey = PeerId.Of(CryptoPrimitives.ExportPublicPoint(self));
+        var book = new GroupBook(_clock);
+        var group = Private(PolicyV(1));
+        book.Load([group]);
+
+        var previous = new List<GroupPolicy?>();
+        book.PolicyAdopted += (_, before) => previous.Add(before);
+
+        var hostile = PolicyFixture.Policy(_group, Attested, _moderator, version: 2, bans: [new GroupBan(ourKey, Alice)]);
+        Assert.Equal(PolicyOffer.Adopted, book.OfferPolicy(group.Id, GroupPolicyCodec.Encode(hostile)));
+
+        var excluded = book.Find(group.Id);
+        Assert.NotNull(excluded);
+        Assert.Equal(group.Secret, excluded.Secret);
+        Assert.True(excluded.Excludes(ourKey, Alice));
+        Assert.Equal(1UL, previous[0]!.Version);
+
+        // Survit à l'enregistrement : l'état se déduit de la politique gardée.
+        var reloaded = Assert.Single(GroupBookCodec.Decode(GroupBookCodec.Encode(book.Stored)));
+        Assert.True(reloaded.Excludes(ourKey, Alice));
+
+        Assert.Equal(PolicyOffer.Adopted, book.OfferPolicy(group.Id, GroupPolicyCodec.Encode(PolicyV(3))));
+        Assert.False(book.Find(group.Id)!.Excludes(ourKey, Alice));
+        Assert.True(previous[1]!.IsBanned(ourKey, Alice));
+    }
+
+    [Fact]
+    public void Un_groupe_dissous_n_exclut_plus_personne()
+    {
+        using var self = CryptoPrimitives.GenerateIdentity();
+        var ourKey = PeerId.Of(CryptoPrimitives.ExportPublicPoint(self));
+        var group = Private(PolicyV(1, bans: [new GroupBan(null, Mallory)]));
+
+        Assert.True(group.Excludes(ourKey, Mallory));
+        Assert.False((group with { Policy = group.Policy! with { Dissolved = true } }).Excludes(ourKey, Mallory));
+    }
+
+    [Fact]
+    public void Exclus_on_ne_compose_que_le_proprietaire_et_les_moderateurs()
+    {
+        // Eux seuls peuvent lever l'exclusion, et la politique qui la lève
+        // ne voyage que dans une session.
+        using var self = CryptoPrimitives.GenerateIdentity();
+        using var bobIdentity = CryptoPrimitives.GenerateIdentity();
+        var ourKey = PeerId.Of(CryptoPrimitives.ExportPublicPoint(self));
+        var moderatorPrint = PlayerFingerprint.Of("moderateur", 21);
+        var bob = PlayerFingerprint.Of("bob", 21);
+
+        var group = Private(PolicyV(1, bans: [new GroupBan(ourKey, Alice)])) with
+        {
+            Members = new Dictionary<PlayerFingerprint, GroupMember>
+            {
+                [moderatorPrint] = new()
+                {
+                    Fingerprint = moderatorPrint, DisplayName = "Modérateur",
+                    Id = PeerId.Of(CryptoPrimitives.ExportPublicPoint(_moderator)),
+                },
+                [bob] = new()
+                {
+                    Fingerprint = bob, DisplayName = "Bob",
+                    Id = PeerId.Of(CryptoPrimitives.ExportPublicPoint(bobIdentity)),
+                },
+            },
+        };
+
+        var sightings = new[]
+        {
+            new GroupSighting(group.Id, moderatorPrint, "Modérateur"),
+            new GroupSighting(group.Id, bob, "Bob"),
+            new GroupSighting(group.Id, PlayerFingerprint.Of("inconnu", 21), "Inconnu"),
+        };
+
+        var planned = new GroupDialPlanner(_clock).Plan(Alice, sightings, [group], [], ourKey: ourKey);
+        Assert.Equal(moderatorPrint, Assert.Single(planned).PinnedFingerprint);
+
+        // Sans exclusion, tout le monde.
+        Assert.Equal(3, new GroupDialPlanner(_clock).Plan(Alice, sightings, [group with { Policy = PolicyV(2) }], [], ourKey: ourKey).Count);
     }
 
     [Fact]

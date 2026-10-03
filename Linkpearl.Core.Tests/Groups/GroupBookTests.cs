@@ -75,28 +75,53 @@ public sealed class GroupBookTests
     }
 
     [Fact]
-    public void Au_dela_de_256_membres_le_plus_ancien_non_en_pause_est_oublie()
+    public void Au_plafond_le_nouveau_venu_est_refuse_et_aucun_membre_epingle_n_est_oublie()
     {
+        // Oublier le plus ancien rouvrirait son premier contact à qui saurait
+        // remplir le carnet : c'est le nouveau qui attend.
         var book = BookWithOneGroup();
         var id = GroupId.Of(Secret);
         var first = PlayerFingerprint.Of("membre0", 21);
-        var second = PlayerFingerprint.Of("membre1", 21);
 
         for (var i = 0; i < GroupBook.MaxMembersPerGroup; i++)
         {
-            book.Admit(id, PlayerFingerprint.Of($"membre{i}", 21), [2, .. Enumerable.Repeat((byte)i, 32)], $"M{i}");
+            Assert.Equal(GroupAdmission.Pinned,
+                book.Admit(id, PlayerFingerprint.Of($"membre{i}", 21), [2, .. Enumerable.Repeat((byte)i, 32)], $"M{i}"));
             _clock.Advance(TimeSpan.FromSeconds(1));
         }
 
-        // Le premier est en pause : c'est un réglage que l'utilisateur a posé,
-        // on ne le lui retire pas en silence. Le deuxième part à sa place.
-        book.SetPaused(id, first, true);
-        book.Admit(id, PlayerFingerprint.Of("nouveau", 21), OtherKey, "Nouveau");
+        Assert.Equal(GroupAdmission.Full, book.Admit(id, PlayerFingerprint.Of("nouveau", 21), OtherKey, "Nouveau"));
 
         var members = book.Find(id)!.Members;
         Assert.Equal(GroupBook.MaxMembersPerGroup, members.Count);
         Assert.True(members.ContainsKey(first));
-        Assert.False(members.ContainsKey(second));
+        Assert.False(members.ContainsKey(PlayerFingerprint.Of("nouveau", 21)));
+
+        // Un membre déjà connu reste admis, plafond ou non.
+        Assert.Equal(GroupAdmission.Admitted, book.Admit(id, first, [2, .. Enumerable.Repeat((byte)0, 32)], "M0"));
+    }
+
+    [Fact]
+    public void Une_cle_epinglee_ne_parle_pas_pour_un_autre_personnage()
+    {
+        // Sans cette règle, une seule identité se poserait sur chaque passant
+        // l'un après l'autre.
+        var book = BookWithOneGroup();
+        var id = GroupId.Of(Secret);
+        var bob = PlayerFingerprint.Of("bob", 21);
+
+        Assert.Equal(GroupAdmission.Pinned, book.Admit(id, Alice, AliceKey, "Alice"));
+        Assert.Equal(GroupAdmission.Disputed, book.Admit(id, bob, AliceKey, "Bob"));
+
+        Assert.False(book.Find(id)!.Members.ContainsKey(bob));
+        Assert.Equal(GroupAdmission.Pinned, book.Admit(id, bob, OtherKey, "Bob"));
+    }
+
+    [Fact]
+    public void Le_Public_a_son_propre_plafond()
+    {
+        Assert.Equal(GroupBook.MaxPublicMembers, GroupBook.MemberCap(PublicGroup.Create([], _clock.UtcNow)));
+        Assert.Equal(GroupBook.MaxMembersPerGroup, GroupBook.MemberCap(Group(Secret, _clock.UtcNow)));
     }
 
     [Fact]
