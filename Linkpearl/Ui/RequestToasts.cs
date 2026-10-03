@@ -31,6 +31,7 @@ internal sealed class RequestToasts : ThemedWindow
     private const float Margin = 12f;
 
     private readonly PresenceService _presence;
+    private readonly PairingService _pairing;
     private readonly PluginState _state;
     private readonly Func<bool> _mainShowsRequests;
     private readonly Action _open;
@@ -41,7 +42,7 @@ internal sealed class RequestToasts : ThemedWindow
     private readonly Action<PendingValidation> _declineAdmission;
 
     public RequestToasts(
-        PresenceService presence, PluginState state, Func<bool> mainShowsRequests, Action open,
+        PresenceService presence, PairingService pairing, PluginState state, Func<bool> mainShowsRequests, Action open,
         Action<IncomingRequest> accept, Action<IncomingRequest> decline,
         Func<IReadOnlyList<PendingValidation>> admissions,
         Action<PendingValidation> approve, Action<PendingValidation> declineAdmission)
@@ -51,6 +52,7 @@ internal sealed class RequestToasts : ThemedWindow
              | ImGuiWindowFlags.NoNav | ImGuiWindowFlags.NoDocking)
     {
         _presence          = presence;
+        _pairing           = pairing;
         _state             = state;
         _mainShowsRequests = mainShowsRequests;
         _open              = open;
@@ -133,7 +135,9 @@ internal sealed class RequestToasts : ThemedWindow
         using var card = Card.Begin($"toast_{id}", background: Theme.BgSurface, accent: Theme.Accent);
 
         Text.WithIcon(Icons.Requests, "Demande de pairage", Theme.Accent, Theme.TextMuted);
-        Text.H2(request.CharacterName);
+
+        // Le nom vient du réseau.
+        Text.H2(Glyphs.Safe(request.CharacterName));
         ImGui.Dummy(Theme.S(0f, Theme.GapXs));
 
         Chip.Draw(
@@ -143,9 +147,12 @@ internal sealed class RequestToasts : ThemedWindow
 
         ImGui.Dummy(Theme.S(0f, Theme.GapXs));
         RequestsPage.DrawRecognitionHint(visible);
+        RequestsPage.DrawReplaceWarning(_pairing.WouldReplace(request));
         ImGui.Dummy(Theme.S(0f, Theme.GapS));
 
-        if (Btn.Draw("Accepter", BtnTone.Action, BtnSize.Small, Icons.Accept, id: $"toast_accept_{id}"))
+        if (Btn.Draw("Accepter", BtnTone.Action, BtnSize.Small, Icons.Accept,
+                     disabled: visible is false, tooltip: visible ? null : RequestsPage.AcceptNeedsVisible,
+                     id: $"toast_accept_{id}"))
             _accept(request);
 
         ImGui.SameLine(0f, Theme.S(Theme.GapS));

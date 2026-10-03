@@ -37,6 +37,10 @@ internal sealed class NearbyPage(
         Text.PageHeader("À proximité",
             "Joueurs à portée utilisant Linkpearl et visibles par les autres.");
 
+        // Aussi ici : c'est la page d'où l'on demande un pairage, et la page
+        // d'ouverture de la fenêtre.
+        RequestsPage.DrawContested(presence);
+
         if (users.Count == 0)
         {
             Feedback.EmptyState(
@@ -141,7 +145,7 @@ internal sealed class NearbyPage(
 
         // Une demande sans réponse n'expire pas de notre côté : un refus ne
         // revient jamais. On laisse donc renvoyer, en disant qu'on l'a déjà fait.
-        var sent = presence.PendingOutgoing.ContainsKey(player.Fingerprint);
+        var sent = presence.HasPendingRequestTo(player.Fingerprint);
 
         // Pas d'orange ici, comme le veut la spec : un bouton par ligne, et huit
         // joueurs à portée feraient huit oranges qui ne désignent plus rien.

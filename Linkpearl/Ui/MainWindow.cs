@@ -80,7 +80,7 @@ public sealed class MainWindow : ThemedWindow
             openCircle);
 
         _requests = new RequestsPage(
-            state, presence, accept, decline, admissions, groupActions.Approve, groupActions.Decline);
+            state, presence, pairing, accept, decline, admissions, groupActions.Approve, groupActions.Decline);
 
         var groups = new GroupsPage(groupBook, candidate, statuses, groupActions, groupEntry, serviceBans);
 

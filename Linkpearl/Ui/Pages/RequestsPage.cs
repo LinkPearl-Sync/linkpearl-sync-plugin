@@ -1,5 +1,6 @@
 using Dalamud.Bindings.ImGui;
 using Linkpearl.Core.Groups;
+using Linkpearl.Core.Transport.Rendezvous;
 using Linkpearl.Integration;
 using Linkpearl.Ui.Components;
 
@@ -15,7 +16,7 @@ namespace Linkpearl.Ui.Pages;
 /// elle vaut mieux qu'une empreinte à comparer.
 /// </remarks>
 internal sealed class RequestsPage(
-    PluginState state, PresenceService presence,
+    PluginState state, PresenceService presence, PairingService pairing,
     Action<IncomingRequest> accept, Action<IncomingRequest> decline,
     Func<IReadOnlyList<PendingValidation>> admissions,
     Action<PendingValidation> approve, Action<PendingValidation> declineAdmission)
@@ -23,8 +24,12 @@ internal sealed class RequestsPage(
     public int Count => presence.RequestCount + admissions().Count;
 
     /// <summary>La personne qui demande est-elle devant nous ?</summary>
+    /// <remarks>
+    /// Par empreinte, donc par nom et par monde : le nom seul faisait passer
+    /// un homonyme d'un autre monde pour « visible à proximité ».
+    /// </remarks>
     public static bool IsVisible(PluginState state, IncomingRequest request)
-        => state.Nearby.Any(player => string.Equals(player.Name, request.CharacterName, StringComparison.Ordinal));
+        => state.Nearby.Any(player => player.Fingerprint == request.Sender);
 
     /// <summary>Le candidat est-il devant nous ?</summary>
     /// <remarks>
@@ -35,6 +40,15 @@ internal sealed class RequestsPage(
         => state.Nearby.Any(player => player.WorldId == pending.WorldId
                                    && string.Equals(player.Name, pending.CharacterName, StringComparison.Ordinal));
 
+    /// <summary>L'alerte d'une boîte aux lettres tenue par une autre connexion, au chat comme ici.</summary>
+    public static string ContestedMessage(RendezvousAddress service)
+        => $"Votre boîte aux lettres sur {service} est tenue par une autre connexion. Si vous n'avez pas "
+         + "d'autre jeu ouvert, quelqu'un tente peut-être d'intercepter vos demandes de pairage.";
+
+    /// <summary>Pourquoi Accepter est grisé.</summary>
+    public const string AcceptNeedsVisible =
+        "Un pairage s'accepte en face à face : le bouton s'active quand ce personnage est visible à proximité.";
+
     public void Draw()
     {
         var requests = presence.PeekRequests();
@@ -42,6 +56,8 @@ internal sealed class RequestsPage(
 
         Text.PageHeader("Demandes",
             "Demandes de partage d'apparences ou d'entrée dans un groupe.");
+
+        DrawContested(presence);
 
         if (requests.Count == 0 && pending.Count == 0)
         {
@@ -59,7 +75,8 @@ internal sealed class RequestsPage(
 
             using var card = Card.Begin($"request_{request.Id.ToHex()}", accent: Theme.Accent);
 
-            Text.H2(request.CharacterName);
+            // Le nom vient du réseau.
+            Text.H2(Glyphs.Safe(request.CharacterName));
             ImGui.Dummy(Theme.S(0f, Theme.GapXs));
 
             Chip.Draw(
@@ -69,9 +86,11 @@ internal sealed class RequestsPage(
 
             ImGui.Dummy(Theme.S(0f, Theme.GapXs));
             DrawRecognitionHint(visible);
+            DrawReplaceWarning(pairing.WouldReplace(request));
             ImGui.Dummy(Theme.S(0f, Theme.GapS));
 
             if (Btn.Draw("Accepter", BtnTone.Action, BtnSize.Small, Icons.Accept,
+                         disabled: visible is false, tooltip: visible ? null : AcceptNeedsVisible,
                          id: $"accept_{request.Id.ToHex()}"))
                 accept(request);
 
@@ -84,6 +103,23 @@ internal sealed class RequestsPage(
 
         foreach (var admission in pending)
             DrawAdmission(admission);
+    }
+
+    /// <summary>
+    /// Dit que notre boîte personnelle est tenue ailleurs, sur chaque service où c'est le cas.
+    /// </summary>
+    /// <remarks>
+    /// Ici, sur la page des demandes, parce que c'est ce qu'une boîte
+    /// interceptée met en jeu : ce que d'autres nous demandent et ce qu'ils
+    /// croient que nous leur répondons.
+    /// </remarks>
+    public static void DrawContested(PresenceService presence)
+    {
+        foreach (var service in presence.ContestedServices)
+        {
+            Feedback.Alert(Theme.Danger, Icons.Warning, ContestedMessage(service));
+            ImGui.Dummy(Theme.S(0f, Theme.GapS));
+        }
     }
 
     /// <summary>Une demande d'entrée dans un groupe, que nous validons comme propriétaire ou modérateur.</summary>
@@ -124,5 +160,17 @@ internal sealed class RequestsPage(
 
         if (visible is false)
             Text.Wrapped("Linkpearl ne peut pas confirmer qu'il se trouve actuellement à proximité.", Theme.Idle);
+    }
+
+    /// <summary>Prévient qu'accepter remplacerait un pairage du carnet.</summary>
+    /// <remarks>
+    /// Une demande au nom d'un pair déjà connu, sous une autre clé, est
+    /// exactement ce que produirait quelqu'un qui se fait passer pour lui :
+    /// le joueur doit le savoir avant de cliquer, pas après.
+    /// </remarks>
+    public static void DrawReplaceWarning(bool replaces)
+    {
+        if (replaces)
+            Text.Wrapped("Ce personnage est déjà dans vos pairs : accepter remplacera le pairage existant.", Theme.Idle);
     }
 }
