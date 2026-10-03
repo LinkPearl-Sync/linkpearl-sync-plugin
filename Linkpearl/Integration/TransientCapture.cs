@@ -97,7 +97,8 @@ public sealed class TransientCapture : IDisposable
             }
             catch (IOException e)
             {
-                _log.Warning(e, "Mémoire des animations illisible, repartie de zéro.");
+                _log.Warning($"Mémoire des animations illisible, repartie de zéro ({e.GetType().Name}).");
+                _log.Debug(e, "Mémoire des animations illisible, repartie de zéro.");
                 _memory = new TransientMemory(_clock);
             }
         }
@@ -158,7 +159,8 @@ public sealed class TransientCapture : IDisposable
             {
                 // Perdre la sauvegarde ne coûte qu'un envoi incomplet après le
                 // prochain lancement ; la construction suivante réessaiera.
-                _log.Warning(e, "Mémoire des animations non sauvegardée.");
+                _log.Warning($"Mémoire des animations non sauvegardée ({e.GetType().Name}).");
+                _log.Debug(e, "Mémoire des animations non sauvegardée.");
             }
         }
     }

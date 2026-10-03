@@ -248,6 +248,47 @@ public sealed class FileSystemBlobStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task Les_assemblages_en_vol_reservent_leur_place()
+    {
+        // L'espace libre ne voit que ce qui est écrit : sans réserve, chaque
+        // assemblage constatait à son ouverture qu'il restait de la place, et
+        // soixante-quatre de 128 Mo passaient ensemble sur un disque qui n'en
+        // tenait qu'un.
+        var store = Store(new CacheSettings { MinimumFreeBytes = 1_000 });
+        _free = 1_000 + 150;
+
+        var first = Bytes(new string('a', 100));
+        var second = Bytes(new string('b', 100));
+
+        var opened = await store.BeginAssemblyAsync(BlobHash.OfContent(first), first.Length, default);
+        var refused = await store.BeginAssemblyAsync(BlobHash.OfContent(second), second.Length, default);
+
+        Assert.False((await refused.CommitAsync(default)).Accepted);
+
+        // Abandonné, le premier rend sa réserve, et le second trouve sa place.
+        opened.Abort();
+        await opened.DisposeAsync();
+
+        await using var retried = await store.BeginAssemblyAsync(BlobHash.OfContent(second), second.Length, default);
+        await retried.WriteAtAsync(0, second, default);
+        Assert.True((await retried.CommitAsync(default)).Accepted);
+    }
+
+    [Fact]
+    public async Task Une_ecriture_rend_sa_reserve_en_se_terminant()
+    {
+        var store = Store(new CacheSettings { MinimumFreeBytes = 1_000 });
+        _free = 1_000 + 150;
+
+        for (var i = 0; i < 5; i++)
+        {
+            // Cinq blobs de 100 octets l'un après l'autre : chacun tient seul,
+            // et aucune réserve ne doit survivre à sa publication.
+            Assert.True((await PutAsync(store, Bytes($"{i}" + new string('c', 99)))).Accepted);
+        }
+    }
+
+    [Fact]
     public async Task Un_blob_plus_gros_que_le_quota_entier_est_refuse()
     {
         var store = Store(new CacheSettings { QuotaBytes = 100 });

@@ -71,4 +71,6 @@ public sealed class SwitchableBlobStore : IBlobStore
     public bool NeedsEviction => Current?.NeedsEviction ?? false;
 
     public long EvictionTarget => Current?.EvictionTarget ?? 0;
+
+    public long QuotaBytes => Current?.QuotaBytes ?? 0;
 }

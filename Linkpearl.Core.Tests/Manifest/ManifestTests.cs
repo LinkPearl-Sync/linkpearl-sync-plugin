@@ -1,6 +1,7 @@
 using Linkpearl.Core.Cache;
 using Linkpearl.Core.Manifest;
 using Linkpearl.Core.Safety;
+using Linkpearl.Core.Tests.Safety;
 using Xunit;
 
 namespace Linkpearl.Core.Tests.Manifest;
@@ -120,7 +121,10 @@ public class ManifestCodecTests
                 new ResolvedFile("chara/human/c0201/obj/body/b0001/texture/--c0201b0001_base.tex",
                                  BlobHash.OfContent("b"u8), 2),
             ],
-            "bWV0YQ==", "Z2xhbW91cmVy", Quotas.Default).Manifest;
+            Meta, Glam, Quotas.Default).Manifest;
+
+    private static readonly string Meta = Gzipped.Base64(1, "manipulations");
+    private static readonly string Glam = Gzipped.Base64(6, "{\"FileVersion\":2}");
 
     [Fact]
     public void L_aller_retour_compresse_conserve_le_manifeste()
@@ -217,5 +221,130 @@ public class ManifestCodecTests
     {
         var futur = Sample() with { Version = 9999 };
         Assert.False(ManifestValidator.TryAccept(futur, Quotas.Default, out _));
+    }
+
+    private static FileReplacement Entry(int i, long size, BlobHash? hash = null)
+        => new([$"chara/equipment/e{i:D4}/model/c0101e{i:D4}_top.mdl"],
+               hash ?? BlobHash.OfContent(System.Text.Encoding.UTF8.GetBytes($"blob{i}")), size);
+
+    [Fact]
+    public void Une_apparence_plus_lourde_que_le_plafond_total_est_refusee()
+    {
+        // Chaque blob reste sous son plafond, mais leur somme remplirait le
+        // disque : c'est la somme qui compte pour le cache.
+        var quotas = Quotas.Default with { MaxManifestTotalBytes = 250 };
+        var manifest = Sample() with { Replacements = [Entry(1, 100), Entry(2, 100), Entry(3, 100)] };
+
+        Assert.False(ManifestValidator.TryAccept(manifest, quotas, out var why));
+        Assert.Contains("lourde", why!);
+    }
+
+    [Fact]
+    public void Un_meme_blob_repete_ne_compte_qu_une_fois_dans_le_total()
+    {
+        var hash = BlobHash.OfContent("partagé"u8);
+        var quotas = Quotas.Default with { MaxManifestTotalBytes = 150 };
+        var manifest = Sample() with { Replacements = [Entry(1, 100, hash), Entry(2, 100, hash)] };
+
+        Assert.True(ManifestValidator.TryAccept(manifest, quotas, out var why), why);
+    }
+
+    [Fact]
+    public void Deux_tailles_pour_une_meme_empreinte_sont_refusees()
+    {
+        // Le receveur exige que l'annonce d'un blob porte la taille du
+        // manifeste : deux tailles pour un contenu rendraient cette règle
+        // ambiguë, et la somme fausse.
+        var hash = BlobHash.OfContent("partagé"u8);
+        var manifest = Sample() with { Replacements = [Entry(1, 100, hash), Entry(2, 5000, hash)] };
+
+        Assert.False(ManifestValidator.TryAccept(manifest, Quotas.Default, out var why));
+        Assert.Contains("deux tailles", why!);
+    }
+
+    [Fact]
+    public void Des_manipulations_meta_qui_cachent_une_bombe_sont_refusees()
+    {
+        // Penumbra détendrait tout sur le thread du jeu, sans plafond.
+        var bomb = Gzipped.Base64(new byte[Quotas.Default.MaxMetaManipulationsDecompressedBytes + 1]);
+        var manifest = Sample() with { MetaManipulations = bomb };
+
+        Assert.True(bomb.Length < Quotas.Default.MaxMetaManipulationChars);
+        Assert.False(ManifestValidator.TryAccept(manifest, Quotas.Default, out var why));
+        Assert.Contains("méta", why!);
+    }
+
+    [Fact]
+    public void Un_etat_Glamourer_qui_cache_une_bombe_est_refuse()
+    {
+        var bomb = Gzipped.Base64(new byte[Quotas.Default.MaxGlamourerStateDecompressedBytes + 1]);
+        var manifest = Sample() with { GlamourerState = bomb };
+
+        Assert.True(bomb.Length < Quotas.Default.MaxGlamourerStateChars);
+        Assert.False(ManifestValidator.TryAccept(manifest, Quotas.Default, out var why));
+        Assert.Contains("Glamourer", why!);
+    }
+
+    [Theory]
+    [InlineData("bWV0YQ==")]
+    [InlineData("pas du base64 !!!")]
+    public void Des_manipulations_meta_hors_format_sont_refusees(string meta)
+        => Assert.False(ManifestValidator.TryAccept(Sample() with { MetaManipulations = meta }, Quotas.Default, out _));
+
+    [Fact]
+    public void Le_plus_gros_manifeste_honnete_tient_sous_le_plafond_de_detente()
+    {
+        // Le calcul qui fixe MaxManifestDecompressedBytes : chaque plafond du
+        // validateur atteint à la fois, avec des chaînes comme les plugins en
+        // produisent (base64 réel, JSON réel), et des chemins au plus long.
+        var q = Quotas.Default;
+
+        static string LongPath(string prefix, int i, int length)
+        {
+            var head = $"chara/{prefix}{i:D5}/";
+            return head + new string('a', length - head.Length - 4) + ".pap";
+        }
+
+        var replacements = Enumerable.Range(0, q.MaxReplacements)
+            .Select(i => new FileReplacement(
+                [LongPath("r", i, q.MaxGamePathLength)],
+                BlobHash.OfContent(System.Text.Encoding.UTF8.GetBytes($"blob{i}")), q.MaxBlobBytes / 1000))
+            .ToList();
+
+        var swaps = Enumerable.Range(0, q.MaxGamePaths - q.MaxReplacements)
+            .Select(i => new FileSwap(LongPath("s", i, q.MaxGamePathLength), LongPath("t", i, q.MaxGamePathLength)))
+            .ToList();
+
+        // Du base64 d'octets aléatoires : un « + » sur soixante-quatre, que
+        // l'encodeur JSON échappe en six octets.
+        string RandomBase64(int chars)
+            => Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(chars * 3 / 4))[..chars];
+
+        // Du JSON dense en guillemets, comme un profil Customize+ : l'encodeur
+        // échappe chacun en six octets.
+        static string JsonOfLength(int chars)
+        {
+            var json = new System.Text.StringBuilder("{");
+
+            while (json.Length < chars - 16)
+                json.Append("\"X\":0.1,");
+
+            return json.Append("\"Z\":0}").ToString();
+        }
+
+        var manifest = new CharacterManifest(
+            CharacterManifest.CurrentVersion, replacements,
+            RandomBase64(q.MaxMetaManipulationChars), RandomBase64(q.MaxGlamourerStateChars),
+            new CharacterExtras(
+                JsonOfLength(q.MaxCustomizePlusChars), JsonOfLength(q.MaxHeelsChars), JsonOfLength(q.MaxHonorificChars),
+                RandomBase64(q.MaxMoodlesChars), RandomBase64(q.MaxPetNicknamesChars)),
+            swaps);
+
+        var encoded = ManifestCodec.Encode(manifest).Length;
+
+        Assert.True(encoded <= q.MaxManifestDecompressedBytes,
+            $"{encoded} octets encodés pour un plafond de {q.MaxManifestDecompressedBytes}");
+        Assert.True(encoded > q.MaxManifestDecompressedBytes * 3 / 4,
+            $"{encoded} octets : le plafond n'est plus serré, le revoir à la baisse");
     }
 }

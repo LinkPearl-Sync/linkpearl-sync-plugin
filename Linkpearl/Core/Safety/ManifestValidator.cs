@@ -1,3 +1,4 @@
+using Linkpearl.Core.Cache;
 using Linkpearl.Core.Manifest;
 
 namespace Linkpearl.Core.Safety;
@@ -39,28 +40,17 @@ public static class ManifestValidator
             return false;
         }
 
-        if (IsBase64(manifest.MetaManipulations) is false)
+        if (manifest.GlamourerState is { } glamourerLength && glamourerLength.Length > quotas.MaxGlamourerStateChars)
         {
-            rejection = "manipulations méta : base64 invalide";
+            rejection = $"plafond de l'état Glamourer dépassé (plafond {quotas.MaxGlamourerStateChars})";
             return false;
         }
 
-        if (manifest.GlamourerState is { } glamourer)
-        {
-            if (glamourer.Length > quotas.MaxGlamourerStateChars)
-            {
-                rejection = $"plafond de l'état Glamourer dépassé (plafond {quotas.MaxGlamourerStateChars})";
-                return false;
-            }
-
-            if (IsBase64(glamourer) is false)
-            {
-                rejection = "état Glamourer : base64 invalide";
-                return false;
-            }
-        }
-
+        // Les contrôles qui ne coûtent rien d'abord : les détentes ci-dessous
+        // ne se paient que pour un manifeste déjà bien formé ailleurs.
         var totalPaths = 0;
+        var totalBytes = 0L;
+        var sizes = new Dictionary<BlobHash, long>(manifest.Replacements.Count);
 
         foreach (var replacement in manifest.Replacements)
         {
@@ -68,6 +58,28 @@ public static class ManifestValidator
             {
                 rejection = $"taille de blob hors bornes ({replacement.Size}, plafond {quotas.MaxBlobBytes})";
                 return false;
+            }
+
+            // Une empreinte, une taille : c'est sur elle que le receveur
+            // accepte ou refuse l'annonce du blob, et que la somme se calcule.
+            if (sizes.TryGetValue(replacement.Hash, out var known))
+            {
+                if (known != replacement.Size)
+                {
+                    rejection = $"deux tailles pour une même empreinte ({replacement.Hash})";
+                    return false;
+                }
+            }
+            else
+            {
+                sizes[replacement.Hash] = replacement.Size;
+                totalBytes += replacement.Size;
+
+                if (totalBytes > quotas.MaxManifestTotalBytes)
+                {
+                    rejection = $"apparence trop lourde (plus de {quotas.MaxManifestTotalBytes / 1024 / 1024} Mo)";
+                    return false;
+                }
             }
 
             if (replacement.GamePaths.Count == 0)
@@ -149,10 +161,21 @@ public static class ManifestValidator
             return false;
         }
 
+        // En dernier : ce sont les seuls contrôles qui coûtent une détente.
+        if (GzipBase64.IsBounded(manifest.MetaManipulations, quotas.MaxMetaManipulationsDecompressedBytes, out var metaWhy) is false)
+        {
+            rejection = $"manipulations méta : {metaWhy}";
+            return false;
+        }
+
+        if (manifest.GlamourerState is { } glamourer
+            && GzipBase64.IsBounded(glamourer, quotas.MaxGlamourerStateDecompressedBytes, out var glamourerWhy) is false)
+        {
+            rejection = $"état Glamourer : {glamourerWhy}";
+            return false;
+        }
+
         rejection = null;
         return true;
     }
-
-    private static bool IsBase64(string value)
-        => value.Length == 0 || Convert.TryFromBase64String(value, new byte[((value.Length * 3) / 4) + 3], out _);
 }

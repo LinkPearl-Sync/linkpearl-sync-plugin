@@ -76,7 +76,12 @@ public static class ExtrasValidator
 
             using var doc = JsonDocument.Parse(heels);
 
-            if (HeelsSanitizer.Removed.Any(name => doc.RootElement.TryGetProperty(name, out _)))
+            if (JsonShape.HasDistinctKeys(doc.RootElement) is false)
+                return "SimpleHeels : clé en double à la casse près";
+
+            // À la casse près, comme SimpleHeels les lira : « tags » échappait
+            // à une comparaison exacte et arrivait quand même jusqu'au plugin.
+            if (HeelsSanitizer.Removed.Any(name => JsonShape.TryGetPropertyIgnoringCase(doc.RootElement, name, out _)))
                 return "SimpleHeels : champs qui auraient dû être retirés à l'envoi";
         }
 
@@ -90,7 +95,11 @@ public static class ExtrasValidator
 
             using var doc = JsonDocument.Parse(honorific);
 
-            if (doc.RootElement.TryGetProperty("Title", out var title))
+            if (JsonShape.HasDistinctKeys(doc.RootElement) is false)
+                return "Honorific : clé en double à la casse près";
+
+            // À la casse près : Honorific lit « title » comme « Title ».
+            if (JsonShape.TryGetPropertyIgnoringCase(doc.RootElement, "Title", out var title))
             {
                 if (title.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
                     return "Honorific : titre non textuel";

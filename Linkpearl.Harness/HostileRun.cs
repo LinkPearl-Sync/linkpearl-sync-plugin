@@ -165,8 +165,8 @@ public static class HostileRun
         var honest = BlobHash.OfContent(content);
 
         var requested = hostility == Hostility.Unrequested
-            ? new HashSet<BlobHash>()
-            : new HashSet<BlobHash> { announced, honest };
+            ? new Dictionary<BlobHash, long>()
+            : new Dictionary<BlobHash, long> { [announced] = content.Length, [honest] = content.Length };
 
         await using var receiver = new BlobReceiver(store, Quotas.Default, requested);
 

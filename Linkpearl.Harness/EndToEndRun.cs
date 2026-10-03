@@ -208,7 +208,7 @@ public static class EndToEndRun
         IBlobStore source, IBlobStore destination, TransferPlan plan,
         EndToEndSettings settings, IClock clock, CancellationToken ct)
     {
-        var requested = plan.Missing.Select(m => m.Hash).ToHashSet();
+        var requested = plan.Missing.ToDictionary(m => m.Hash, m => m.Size);
         await using var receiver = new BlobReceiver(destination, Quotas.Default, requested);
 
         var sender = new BlobSender(source, settings.BlockSize);

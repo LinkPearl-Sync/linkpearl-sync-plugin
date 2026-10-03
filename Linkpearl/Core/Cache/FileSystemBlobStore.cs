@@ -110,21 +110,57 @@ public sealed class FileSystemBlobStore : IBlobStore
 
     public int Count => _entries.Count;
 
-    public bool IsReadOnly
+    public bool IsReadOnly => FreeBytes() < _settings.MinimumFreeBytes;
+
+    public long QuotaBytes => _settings.QuotaBytes;
+
+    /// <summary>
+    /// Octets promis aux écritures en cours et pas encore arrivés sur le disque.
+    /// </summary>
+    /// <remarks>
+    /// L'espace libre ne voit que ce qui est déjà écrit. Sans cette réserve,
+    /// soixante-quatre assemblages de 128 Mo s'ouvraient tous sur un disque
+    /// qui n'avait de place que pour un seul, chacun ayant constaté à son
+    /// ouverture qu'il restait assez de place. Chaque écriture rend la part
+    /// qu'elle consomme, la fermeture rend le reste.
+    /// </remarks>
+    private long _reserved;
+
+    private long FreeBytes()
     {
-        get
+        try
         {
-            try
-            {
-                return _freeSpace(_root) < _settings.MinimumFreeBytes;
-            }
-            catch (Exception e) when (e is IOException or ArgumentException or UnauthorizedAccessException)
-            {
-                // Un chemin UNC où DriveInfo échoue, par exemple : l'espace
-                // est inconnu, ce qui ne doit pas bloquer chaque écriture.
-                return false;
-            }
+            return _freeSpace(_root);
         }
+        catch (Exception e) when (e is IOException or ArgumentException or UnauthorizedAccessException)
+        {
+            // Un chemin UNC où DriveInfo échoue, par exemple : l'espace
+            // est inconnu, ce qui ne doit pas bloquer chaque écriture.
+            return long.MaxValue;
+        }
+    }
+
+    /// <summary>Réserve la place d'un blob à venir, ou dit pourquoi elle manque.</summary>
+    private string? TryReserve(long size)
+    {
+        var free = FreeBytes();
+        var promised = Interlocked.Add(ref _reserved, size);
+
+        // Un espace inconnu (long.MaxValue) ne se compare pas : la soustraction
+        // ne déborderait pas, mais elle ne voudrait rien dire.
+        if (free == long.MaxValue || free - promised >= _settings.MinimumFreeBytes)
+            return null;
+
+        Interlocked.Add(ref _reserved, -size);
+        return $"espace libre insuffisant sur le volume du cache (moins de {_settings.MinimumFreeBytes} octets "
+             + "une fois les transferts en cours écrits)";
+    }
+
+    /// <summary>Rend une part de réservation, écrite ou abandonnée.</summary>
+    private void Release(long size)
+    {
+        if (size > 0)
+            Interlocked.Add(ref _reserved, -size);
     }
 
     public string PathFor(BlobHash hash)
@@ -168,13 +204,12 @@ public sealed class FileSystemBlobStore : IBlobStore
         if (SignalIfRootMissing())
             return Task.FromResult<IBlobWriter>(new RefusedBlobWriter(RootMissing));
 
-        if (IsReadOnly)
-            return Task.FromResult<IBlobWriter>(new RefusedBlobWriter(
-                $"espace libre insuffisant sur le volume du cache (moins de {_settings.MinimumFreeBytes} octets)"));
-
-        if (expectedSize > _settings.QuotaBytes)
+        if (expectedSize < 0 || expectedSize > _settings.QuotaBytes)
             return Task.FromResult<IBlobWriter>(new RefusedBlobWriter(
                 $"blob plus gros que le quota entier ({expectedSize} octets pour un quota de {_settings.QuotaBytes})"));
+
+        if (TryReserve(expectedSize) is { } full)
+            return Task.FromResult<IBlobWriter>(new RefusedBlobWriter(full));
 
         var part = Path.Combine(IncomingDirectory, Guid.NewGuid().ToString("N") + ".part");
 
@@ -184,6 +219,8 @@ public sealed class FileSystemBlobStore : IBlobStore
         }
         catch (DirectoryNotFoundException)
         {
+            Release(expectedSize);
+
             // Le dossier a pu être vidé (sans être supprimé) entre la
             // vérification ci-dessus et l'ouverture du fichier temporaire :
             // même traitement qu'une racine perdue, sans rien recréer.
@@ -197,13 +234,12 @@ public sealed class FileSystemBlobStore : IBlobStore
         if (SignalIfRootMissing())
             return Task.FromResult<IBlobAssembly>(new RefusedBlobAssembly(RootMissing));
 
-        if (IsReadOnly)
-            return Task.FromResult<IBlobAssembly>(new RefusedBlobAssembly(
-                $"espace libre insuffisant sur le volume du cache (moins de {_settings.MinimumFreeBytes} octets)"));
-
-        if (expectedSize > _settings.QuotaBytes)
+        if (expectedSize < 0 || expectedSize > _settings.QuotaBytes)
             return Task.FromResult<IBlobAssembly>(new RefusedBlobAssembly(
                 $"blob plus gros que le quota entier ({expectedSize} octets pour un quota de {_settings.QuotaBytes})"));
+
+        if (TryReserve(expectedSize) is { } full)
+            return Task.FromResult<IBlobAssembly>(new RefusedBlobAssembly(full));
 
         var part = Path.Combine(IncomingDirectory, Guid.NewGuid().ToString("N") + ".part");
 
@@ -213,6 +249,8 @@ public sealed class FileSystemBlobStore : IBlobStore
         }
         catch (DirectoryNotFoundException)
         {
+            Release(expectedSize);
+
             // Même situation que dans BeginWriteAsync : le dossier a pu être
             // vidé entre-temps.
             RootLost?.Invoke();
@@ -384,9 +422,18 @@ public sealed class FileSystemBlobStore : IBlobStore
         private bool _committed;
         private bool _closed;
 
+        /// <summary>La part de la réservation déjà rendue, écrite ou abandonnée.</summary>
+        private long _released;
+
         public async ValueTask WriteAtAsync(long offset, ReadOnlyMemory<byte> data, CancellationToken ct)
         {
             await RandomAccess.WriteAsync(_handle, data, offset, ct).ConfigureAwait(false);
+
+            // Ce qui est écrit se voit désormais dans l'espace libre : le
+            // garder aussi en réserve le compterait deux fois.
+            var consumed = Math.Min(expectedSize - _released, data.Length);
+            _released += consumed;
+            store.Release(consumed);
 
             if (offset == _hashedUpTo)
             {
@@ -477,6 +524,8 @@ public sealed class FileSystemBlobStore : IBlobStore
         {
             _hash.Dispose();
             Close();
+            store.Release(expectedSize - _released);
+            _released = expectedSize;
 
             if (_committed is false && (_aborted || File.Exists(partPath)))
                 Discard();
@@ -517,11 +566,18 @@ public sealed class FileSystemBlobStore : IBlobStore
         private bool _aborted;
         private bool _committed;
 
+        /// <summary>La part de la réservation déjà rendue, voir <see cref="BlobAssembly"/>.</summary>
+        private long _released;
+
         public async ValueTask WriteAsync(ReadOnlyMemory<byte> data, CancellationToken ct)
         {
             _hash.AppendData(data.Span);
             await _stream.WriteAsync(data, ct).ConfigureAwait(false);
             _written += data.Length;
+
+            var consumed = Math.Min(expectedSize - _released, data.Length);
+            _released += consumed;
+            store.Release(consumed);
         }
 
         public async ValueTask<BlobCommitResult> CommitAsync(CancellationToken ct)
@@ -575,6 +631,8 @@ public sealed class FileSystemBlobStore : IBlobStore
         public async ValueTask DisposeAsync()
         {
             _hash.Dispose();
+            store.Release(expectedSize - _released);
+            _released = expectedSize;
 
             if (_committed)
                 return;

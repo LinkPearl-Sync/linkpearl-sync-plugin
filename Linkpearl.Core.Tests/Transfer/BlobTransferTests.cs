@@ -58,6 +58,25 @@ public sealed class BlobTransferTests : IDisposable
         return payload;
     }
 
+    /// <summary>Ce que le plan demande : chaque blob avec la taille du manifeste.</summary>
+    internal static Dictionary<BlobHash, long> Want(params (BlobHash Hash, long Size)[] wanted)
+        => wanted.ToDictionary(w => w.Hash, w => w.Size);
+
+    [Fact]
+    public async Task Une_annonce_qui_ne_porte_pas_la_taille_du_manifeste_est_refusee()
+    {
+        // Le manifeste a été jugé sur cette taille, plafond total compris : un
+        // pair qui annonce plus en route ferait réserver ce que la validation
+        // n'a jamais accepté.
+        var hash = BlobHash.OfContent("x"u8);
+        await using var receiver = new BlobReceiver(NewStore(), Quotas.Default, BlobTransferTests.Want((hash, 1000)));
+
+        var outcome = await receiver.HandleAsync(1, MessageKind.BlobStart, Start(hash, 100_000, 0, 100_000), default);
+
+        Assert.False(outcome.Accepted);
+        Assert.Contains("manifeste", outcome.Rejection!, StringComparison.OrdinalIgnoreCase);
+    }
+
     private async Task<FileSystemBlobStore> StoreWith(byte[] content)
     {
         var store = NewStore();
@@ -80,7 +99,7 @@ public sealed class BlobTransferTests : IDisposable
         var destination = NewStore();
 
         var sender = new BlobSender(source, blockSize: 16 * 1024);
-        await using var receiver = new BlobReceiver(destination, Quotas.Default, new HashSet<BlobHash> { hash });
+        await using var receiver = new BlobReceiver(destination, Quotas.Default, BlobTransferTests.Want((hash, content.Length)));
 
         await foreach (var frame in sender.FramesFor(hash, default))
         {
@@ -105,7 +124,7 @@ public sealed class BlobTransferTests : IDisposable
         var destination = NewStore();
 
         var sender = new BlobSender(source, 16 * 1024);
-        await using var receiver = new BlobReceiver(destination, Quotas.Default, new HashSet<BlobHash> { hash });
+        await using var receiver = new BlobReceiver(destination, Quotas.Default, BlobTransferTests.Want((hash, content.Length)));
 
         await foreach (var frame in sender.FramesFor(hash, default))
             Assert.True((await receiver.HandleAsync(1, frame.Kind, frame.Payload, default)).Accepted);
@@ -125,7 +144,7 @@ public sealed class BlobTransferTests : IDisposable
         var destination = NewStore();
 
         var sender = new BlobSender(source, 16 * 1024);
-        await using var receiver = new BlobReceiver(destination, Quotas.Default, new HashSet<BlobHash>());
+        await using var receiver = new BlobReceiver(destination, Quotas.Default, BlobTransferTests.Want());
 
         var first = await sender.FramesFor(hash, default).FirstAsync();
         var outcome = await receiver.HandleAsync(1, first.Kind, first.Payload, default);
@@ -138,7 +157,7 @@ public sealed class BlobTransferTests : IDisposable
     public async Task Un_bloc_sans_annonce_prealable_est_refuse()
     {
         var destination = NewStore();
-        await using var receiver = new BlobReceiver(destination, Quotas.Default, new HashSet<BlobHash>());
+        await using var receiver = new BlobReceiver(destination, Quotas.Default, BlobTransferTests.Want());
 
         var outcome = await receiver.HandleAsync(1, MessageKind.BlobChunk, new byte[100], default);
 
@@ -153,7 +172,7 @@ public sealed class BlobTransferTests : IDisposable
         var destination = NewStore();
         var quotas = Quotas.Default with { MaxBlobBytes = 1000 };
 
-        await using var receiver = new BlobReceiver(destination, quotas, new HashSet<BlobHash> { hash });
+        await using var receiver = new BlobReceiver(destination, quotas, BlobTransferTests.Want((hash, 5000)));
 
         var outcome = await receiver.HandleAsync(1, MessageKind.BlobStart, Start(hash, 5000, 0, 5000), default);
 
@@ -173,7 +192,7 @@ public sealed class BlobTransferTests : IDisposable
         var destination = NewStore();
 
         var sender = new BlobSender(source, 16 * 1024);
-        await using var receiver = new BlobReceiver(destination, Quotas.Default, new HashSet<BlobHash> { hash });
+        await using var receiver = new BlobReceiver(destination, Quotas.Default, BlobTransferTests.Want((hash, content.Length)));
 
         var frames = new List<OutgoingFrame>();
         await foreach (var frame in sender.FramesFor(hash, default))
@@ -202,7 +221,7 @@ public sealed class BlobTransferTests : IDisposable
         var envoye = "ce qui est envoyé"u8.ToArray();
 
         var destination = NewStore();
-        await using var receiver = new BlobReceiver(destination, Quotas.Default, new HashSet<BlobHash> { annonce });
+        await using var receiver = new BlobReceiver(destination, Quotas.Default, BlobTransferTests.Want((annonce, envoye.Length)));
 
         var start = Start(annonce, envoye.Length, 0, envoye.Length);
 
@@ -227,7 +246,7 @@ public sealed class BlobTransferTests : IDisposable
 
         var destination = NewStore();
         await using var receiver = new BlobReceiver(
-            destination, Quotas.Default, new HashSet<BlobHash> { hash, otherHash });
+            destination, Quotas.Default, Want((hash, content.Length), (otherHash, other.Length)));
 
         var start = Start(hash, content.Length, 0, content.Length);
 
@@ -250,7 +269,7 @@ public sealed class BlobTransferTests : IDisposable
     public async Task Un_message_tronque_est_refuse_sans_lever(byte kind, int length)
     {
         var destination = NewStore();
-        await using var receiver = new BlobReceiver(destination, Quotas.Default, new HashSet<BlobHash>());
+        await using var receiver = new BlobReceiver(destination, Quotas.Default, BlobTransferTests.Want());
 
         var outcome = await receiver.HandleAsync(1, kind, new byte[length], default);
 
@@ -262,7 +281,7 @@ public sealed class BlobTransferTests : IDisposable
     public async Task Un_type_de_message_inconnu_est_refuse()
     {
         var destination = NewStore();
-        await using var receiver = new BlobReceiver(destination, Quotas.Default, new HashSet<BlobHash>());
+        await using var receiver = new BlobReceiver(destination, Quotas.Default, BlobTransferTests.Want());
 
         Assert.False((await receiver.HandleAsync(1, 0xFE, new byte[10], default)).Accepted);
     }
@@ -277,7 +296,7 @@ public sealed class BlobTransferTests : IDisposable
         var destination = await StoreWith(content);
 
         var sender = new BlobSender(source, 16 * 1024);
-        await using var receiver = new BlobReceiver(destination, Quotas.Default, new HashSet<BlobHash> { hash });
+        await using var receiver = new BlobReceiver(destination, Quotas.Default, BlobTransferTests.Want((hash, content.Length)));
 
         var start = await sender.FramesFor(hash, default).FirstAsync();
         var outcome = await receiver.HandleAsync(1, start.Kind, start.Payload, default);
@@ -362,7 +381,7 @@ public sealed class BlobSegmentTests : IDisposable
         var destination = NewStore();
 
         var sender = new BlobSender(source, 16 * 1024);
-        await using var receiver = new BlobReceiver(destination, Quotas.Default, new HashSet<BlobHash> { hash });
+        await using var receiver = new BlobReceiver(destination, Quotas.Default, BlobTransferTests.Want((hash, content.Length)));
 
         // Chaque tronçon sur son canal, et les trames des trois entrelacées,
         // le dernier tronçon en tête : l'ordre d'arrivée entre canaux n'est
@@ -408,7 +427,7 @@ public sealed class BlobSegmentTests : IDisposable
         // Des tronçons qui se chevauchent laisseraient un pair écrire deux fois
         // la même zone et masquer ce qu'il y a mis la première fois.
         var hash = BlobHash.OfContent("x"u8);
-        await using var receiver = new BlobReceiver(NewStore(), Quotas.Default, new HashSet<BlobHash> { hash });
+        await using var receiver = new BlobReceiver(NewStore(), Quotas.Default, BlobTransferTests.Want((hash, 3L * Segment)));
 
         var outcome = await receiver.HandleAsync(
             1, MessageKind.BlobStart, Start(hash, 3L * Segment, 1000, Segment), default);
@@ -422,7 +441,7 @@ public sealed class BlobSegmentTests : IDisposable
     public async Task Un_troncon_de_longueur_inattendue_est_refuse(long length)
     {
         var hash = BlobHash.OfContent("x"u8);
-        await using var receiver = new BlobReceiver(NewStore(), Quotas.Default, new HashSet<BlobHash> { hash });
+        await using var receiver = new BlobReceiver(NewStore(), Quotas.Default, BlobTransferTests.Want((hash, 3L * Segment)));
 
         var outcome = await receiver.HandleAsync(
             1, MessageKind.BlobStart, Start(hash, 3L * Segment, 0, length), default);
@@ -434,7 +453,7 @@ public sealed class BlobSegmentTests : IDisposable
     public async Task Le_meme_troncon_sur_deux_canaux_est_refuse()
     {
         var hash = BlobHash.OfContent("x"u8);
-        await using var receiver = new BlobReceiver(NewStore(), Quotas.Default, new HashSet<BlobHash> { hash });
+        await using var receiver = new BlobReceiver(NewStore(), Quotas.Default, BlobTransferTests.Want((hash, 3L * Segment)));
 
         var start = Start(hash, 3L * Segment, Segment, Segment);
 
@@ -446,7 +465,7 @@ public sealed class BlobSegmentTests : IDisposable
     public async Task Deux_tailles_differentes_pour_un_meme_blob_sont_refusees()
     {
         var hash = BlobHash.OfContent("x"u8);
-        await using var receiver = new BlobReceiver(NewStore(), Quotas.Default, new HashSet<BlobHash> { hash });
+        await using var receiver = new BlobReceiver(NewStore(), Quotas.Default, BlobTransferTests.Want((hash, 3L * Segment)));
 
         Assert.True((await receiver.HandleAsync(
             1, MessageKind.BlobStart, Start(hash, 3L * Segment, 0, Segment), default)).Accepted);
@@ -461,7 +480,7 @@ public sealed class BlobSegmentTests : IDisposable
     public async Task Une_annonce_a_l_ancien_format_dit_de_mettre_a_jour()
     {
         var hash = BlobHash.OfContent("x"u8);
-        await using var receiver = new BlobReceiver(NewStore(), Quotas.Default, new HashSet<BlobHash> { hash });
+        await using var receiver = new BlobReceiver(NewStore(), Quotas.Default, BlobTransferTests.Want((hash, 1)));
 
         var old = new byte[BlobHash.SizeInBytes + 8];
         hash.TryWriteTo(old);
@@ -482,7 +501,7 @@ public sealed class BlobSegmentTests : IDisposable
         var destination = NewStore();
 
         var sender = new BlobSender(source, 16 * 1024);
-        await using var receiver = new BlobReceiver(destination, Quotas.Default, new HashSet<BlobHash> { hash });
+        await using var receiver = new BlobReceiver(destination, Quotas.Default, BlobTransferTests.Want((hash, content.Length)));
 
         ReceiveOutcome? last = null;
         byte channel = 1;
