@@ -120,8 +120,9 @@ complète, puisque personne ne la tient. C'est la liste que l'interface montre e
 où un modérateur choisit qui exclure.
 
 **Au plus 10 groupes par personnage**, et **au plus 256 membres rencontrés par
-groupe** ; au-delà, on oublie le plus anciennement vu qui n'est ni modérateur ni
-en pause.
+groupe** (2 048 dans le Public). Révisé le 3 octobre 2026 : au-delà, le nouveau
+venu est refusé ; oublier un membre épinglé rouvrait son premier contact à qui
+savait remplir le carnet.
 
 ### Persistance
 
@@ -348,7 +349,7 @@ la politique.
 | Nommer ou retirer un modérateur | propriétaire | Nouvelle politique |
 | Changer le code, le mot de passe | propriétaire, modérateur | Nouvelle politique ; l'ancien code ne mène plus nulle part |
 | Changer le mode d'admission | propriétaire | Nouvelle politique |
-| Exclure | propriétaire, modérateur | Bannit la clé et l'empreinte. L'exclu qui reçoit la politique quitte le groupe de lui-même et le dit ; s'il ne coopère pas, les autres refusent sa clé et son personnage |
+| Exclure | propriétaire, modérateur | Bannit la clé et l'empreinte. L'exclu qui reçoit la politique garde le groupe, exclu, jusqu'à ce qu'une politique plus récente le réintègre ou qu'il le quitte (révisé le 3 octobre 2026 : sinon un modérateur hostile dissolvait de fait) ; s'il ne coopère pas, les autres refusent sa clé et son personnage |
 | Lever un bannissement | propriétaire, modérateur | Nouvelle politique |
 | Dissoudre | propriétaire | `Dissolved`. Chaque membre qui la reçoit quitte le groupe, sans la relayer : seul le propriétaire la transmet, et il garde le groupe dans sa liste jusqu'à ce que les membres l'aient vu |
 | Quitter | tous | Local : le `GroupRecord` disparaît. Le propriétaire qui quitte dissout |
