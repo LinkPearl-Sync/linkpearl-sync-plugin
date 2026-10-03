@@ -1,6 +1,6 @@
 name: Publier le plugin
 
-# Une version se publie en poussant un tag :
+# Une version se publie en poussant un tag sur un commit de main :
 #
 #   git tag v0.2.0 && git push origin v0.2.0          version stable
 #   git tag v0.2.0-test && git push origin v0.2.0-test   canal de test
@@ -8,6 +8,12 @@ name: Publier le plugin
 # Le canal de test sert aux versions qu'on donne à quelques personnes sans
 # les imposer à tout le monde : Dalamud ne les propose qu'à ceux qui ont
 # coché « Get plugin testing builds ».
+#
+# Ce workflow décide du code que Dalamud charge dans le processus du jeu de
+# chaque joueur. D'où deux jobs : « build » exécute tout le code tiers (archive
+# Dalamud, 7z, paquets NuGet, tests, compilation) sans pouvoir rien écrire, et
+# « publish », seul à écrire, n'exécute rien du dépôt : il reçoit le zip,
+# vérifie, publie.
 
 # Le nom affiché de chaque exécution : sans lui, GitHub reprend le titre du
 # dernier commit, qui ne dit rien de ce qui est publié. Le tag n'est ici
@@ -19,34 +25,80 @@ on:
     tags:
       - 'v*'
 
+# Rien par défaut : chaque job demande ce dont il a besoin.
+permissions: {}
+
+# Deux publications poussent toutes deux repo.json sur main : la seconde
+# attend la première au lieu de partir d'un manifeste périmé. Jamais
+# d'annulation : une publication interrompue laisserait une release sans
+# repo.json, ou l'inverse.
+concurrency:
+  group: plugin-release
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: windows-latest
 
+    # Lecture seule et aucun secret : un paquet NuGet, l'archive Dalamud ou
+    # une dépendance de test compromis s'exécutent ici, et ne doivent pouvoir
+    # ni pousser sur main ni toucher aux releases.
     permissions:
-      contents: write
+      contents: read
+
+    outputs:
+      version: ${{ steps.tag.outputs.VERSION }}
+      is_test: ${{ steps.tag.outputs.IS_TEST }}
 
     # Les actions sont épinglées sur une empreinte de commit et non sur une
     # étiquette. Une étiquette se redéplace : celui qui la contrôle exécuterait
-    # son code dans ce workflow, qui écrit sur le dépôt et publie les versions
-    # que les joueurs installent.
+    # son code dans ce workflow, qui produit les versions que les joueurs
+    # installent.
     steps:
-      - name: Récupérer le dépôt
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
-
       - name: Lire le tag
         id: tag
         shell: bash
+        # La version vient du nom du tag, que quelqu'un choisit. Passée par
+        # l'environnement plutôt qu'interpolée dans le script, elle ne peut pas
+        # être lue comme du shell : un tag « v1.0$(commande) » s'exécuterait
+        # sinon avec les droits du workflow. Trois nombres et seulement
+        # « -test » : un « v0.7.0-rc1 » donnerait l'AssemblyVersion
+        # « 0.7.0-rc1.0 », que Dalamud ne sait pas lire.
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
           VERSION="${TAG#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-test)?$ ]]; then
+            echo "::error::Tag « $TAG » : attendu vX.Y.Z ou vX.Y.Z-test."
+            exit 1
+          fi
 
           IS_TEST=false
           [[ "$VERSION" == *-test ]] && IS_TEST=true
           VERSION="${VERSION%-test}"
 
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-          echo "IS_TEST=$IS_TEST" >> $GITHUB_OUTPUT
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "IS_TEST=$IS_TEST" >> "$GITHUB_OUTPUT"
+
+      - name: Récupérer le dépôt
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          # Le jeton ne reste pas dans .git/config : le code compilé ensuite
+          # n'a pas à le trouver, même en lecture seule.
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Le commit tagué est sur main
+        shell: bash
+        # Un tag posé sur une branche non relue publierait du code que
+        # personne n'a fusionné. Le dépôt est public : le fetch se passe de
+        # jeton.
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Le commit $GITHUB_SHA n'est pas dans l'historique de main : rien n'est publié."
+            exit 1
+          fi
 
       - name: Installer .NET
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9  # v4
@@ -55,25 +107,56 @@ jobs:
 
       - name: Récupérer Dalamud
         shell: pwsh
+        # Le SDK Dalamud compile contre les assemblies du jeu, qu'il cherche
+        # dans le dossier de XIVLauncher. Un runner n'en a pas.
+        #
+        # Piste release et non staging : le 3 octobre 2026, les deux servaient
+        # la même archive (15.0.3.6, niveau d'API 15, celui de
+        # Dalamud.NET.Sdk 15.0.0). Repasser sur staging seulement si un niveau
+        # d'API n'existe que là.
+        #
+        # L'API ne donne aucune somme à part (son champ « Hash » n'est pas
+        # celui de l'archive), mais l'adresse est adressée par contenu :
+        # latest.<SHA-256 de l'archive>.7z, vérifié sur l'archive du 3 octobre.
+        # On la recalcule. Elle vient du même serveur que l'archive : elle
+        # attrape une archive tronquée ou substituée en route, pas un serveur
+        # compromis. La version est journalisée pour qu'on sache après coup
+        # contre quoi chaque release a été compilée.
         run: |
-          # Le SDK Dalamud compile contre les assemblies du jeu, qu'il cherche
-          # dans le dossier de XIVLauncher. Un runner n'en a pas.
-          $info = Invoke-RestMethod -Uri "https://aonyx.ffxiv.wang/Dalamud/Release/VersionInfo?track=staging"
-          Invoke-WebRequest -Uri $info.downloadUrl -OutFile dalamud.7z
+          $info = Invoke-RestMethod -Uri "https://aonyx.ffxiv.wang/Dalamud/Release/VersionInfo?track=release"
+          "Dalamud $($info.AssemblyVersion), commit $($info.GitSha)"
+
+          $url = [string]$info.downloadUrl
+          if ($url -notmatch '^https://aonyx\.ffxiv\.wang/File/Get/latest\.([0-9a-f]{64})\.7z$') {
+            throw "Adresse d'archive Dalamud inattendue : $url"
+          }
+          $expected = $Matches[1]
+
+          Invoke-WebRequest -Uri $url -OutFile dalamud.7z
+          $actual = (Get-FileHash -Algorithm SHA256 dalamud.7z).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) {
+            throw "Archive Dalamud : SHA-256 $actual, attendu $expected."
+          }
+
           New-Item -ItemType Directory -Force -Path "$env:AppData\XIVLauncher\addon\Hooks\dev" | Out-Null
           7z x dalamud.7z -o"$env:AppData\XIVLauncher\addon\Hooks\dev" -y
+
+      - name: Restaurer les paquets
+        # Mode verrouillé : les versions et les empreintes de packages.lock.json
+        # font foi. Un paquet republié sous le même numéro, ou une dépendance
+        # transitive qui a glissé, fait échouer la restauration au lieu de
+        # finir dans le zip.
+        run: |
+          dotnet restore Linkpearl.Core.Tests/Linkpearl.Core.Tests.csproj --locked-mode
+          dotnet restore Linkpearl/Linkpearl.csproj --locked-mode
 
       - name: Vérifier le noyau
         # Le noyau se teste sans le jeu : un échec ici doit empêcher la
         # publication, pas être découvert par les joueurs.
-        run: dotnet test Linkpearl.Core.Tests/Linkpearl.Core.Tests.csproj --nologo
+        run: dotnet test Linkpearl.Core.Tests/Linkpearl.Core.Tests.csproj --no-restore --nologo
 
       - name: Compiler
         shell: bash
-        # La version vient du nom du tag, que quelqu'un choisit. Passée par
-        # l'environnement plutôt qu'interpolée dans le script, elle ne peut pas
-        # être lue comme du shell : un tag « v1.0$(commande) » s'exécuterait
-        # sinon avec les droits du workflow, qui écrit sur le dépôt.
         env:
           VERSION: ${{ steps.tag.outputs.VERSION }}
         # « -p: » et non « /p: » : sous Windows, Git Bash prend un argument qui
@@ -83,88 +166,249 @@ jobs:
         run: >
           dotnet build Linkpearl/Linkpearl.csproj
           -c Release
+          --no-restore
           -warnaserror
           "-p:Version=$VERSION"
 
       - name: Empaqueter
         shell: bash
+        # Le SDK Dalamud produit déjà l'archive au bon format. Son manifeste
+        # part avec : publish y lit le niveau d'API sans rien compiler.
         run: |
-          # Le SDK Dalamud produit déjà l'archive au bon format.
-          cp Linkpearl/bin/Release/LinkpearlSync/latest.zip LinkpearlSync.zip
-          unzip -l LinkpearlSync.zip
+          mkdir dist
+          cp Linkpearl/bin/Release/LinkpearlSync/latest.zip dist/LinkpearlSync.zip
+          cp Linkpearl/bin/Release/LinkpearlSync/LinkpearlSync.json dist/LinkpearlSync.json
+          unzip -l dist/LinkpearlSync.zip
+          sha256sum dist/LinkpearlSync.zip
 
-      - name: Publier la version
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
+      - name: Transmettre le paquet
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
-          tag_name: ${{ github.ref_name }}
-          name: v${{ steps.tag.outputs.VERSION }}${{ steps.tag.outputs.IS_TEST == 'true' && ' (test)' || '' }}
-          prerelease: ${{ steps.tag.outputs.IS_TEST == 'true' }}
-          files: LinkpearlSync.zip
-          generate_release_notes: true
+          name: plugin
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+
+    # Seul job qui écrit. Il n'exécute aucun code du dépôt : il lit repo.json
+    # comme une donnée, et le zip n'est jamais ouvert ici.
+    permissions:
+      contents: write
+      # Pour l'attestation de provenance : un jeton OIDC qui prouve à Sigstore
+      # que ce workflow, sur ce commit, a produit ce zip.
+      id-token: write
+      attestations: write
+
+    env:
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.build.outputs.version }}
+      IS_TEST: ${{ needs.build.outputs.is_test }}
+
+    steps:
+      - name: Récupérer le paquet
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: plugin
+          path: dist
+
+      # Seul repo.json est extrait, depuis main et non depuis le tag : c'est la
+      # dernière version publiée qui sert de base, et main est la branche où
+      # on l'enregistre.
+      - name: Récupérer le manifeste du dépôt
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          ref: main
+          path: main
+          sparse-checkout: repo.json
+          sparse-checkout-cone-mode: false
+
+      - name: Préparer le manifeste
+        id: manifest
+        # Toutes les vérifications passent avant la release : une fois
+        # publiée, une release immuable ne se retire plus proprement.
+        run: |
+          # Revérifiées ici : ce job ne fait confiance à rien qu'il n'a pas lu.
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Version « $VERSION » malformée."; exit 1; }
+          [[ "$IS_TEST" == true || "$IS_TEST" == false ]] || { echo "::error::Canal « $IS_TEST » inconnu."; exit 1; }
+
+          # Le niveau d'API vient du manifeste que le SDK a généré : le coder
+          # en dur ici le ferait mentir au prochain changement.
+          API_LEVEL=$(jq -er '.DalamudApiLevel | select(type == "number" and . == floor and . > 0)' dist/LinkpearlSync.json) \
+            || { echo "::error::DalamudApiLevel absent ou malformé dans LinkpearlSync.json."; exit 1; }
+
+          URL="https://github.com/$GH_REPO/releases/download/$TAG/LinkpearlSync.zip"
+          ASSEMBLY="$VERSION.0"
+
+          # Ce que Dalamud téléchargera et chargera dans le jeu : jamais une
+          # adresse hors des releases de ce dépôt, ni une version qu'il ne lit
+          # pas. pages.yml, sur le site, applique les mêmes règles.
+          [[ "$URL" == https://github.com/LinkPearl-Sync/linkpearl-sync-plugin/releases/download/v* ]] \
+            || { echo "::error::Adresse refusée : $URL"; exit 1; }
+          [[ "$ASSEMBLY" =~ ^[0-9]+(\.[0-9]+){3}$ ]] \
+            || { echo "::error::AssemblyVersion refusée : $ASSEMBLY"; exit 1; }
+
+          # Pas de retour en arrière : un vieux tag poussé après un récent
+          # rendrait aux joueurs une version qu'ils avaient quittée.
+          if [ "$IS_TEST" = true ]; then
+            CURRENT=$(jq -r '.[0].TestingAssemblyVersion // "0.0.0.0"' main/repo.json)
+          else
+            CURRENT=$(jq -r '.[0].AssemblyVersion' main/repo.json)
+          fi
+          if [ "$(printf '%s\n%s\n' "$CURRENT" "$ASSEMBLY" | sort -V | tail -n 1)" != "$ASSEMBLY" ]; then
+            echo "::error::$ASSEMBLY est plus ancienne que $CURRENT, déjà publiée."
+            exit 1
+          fi
+
+          SHA256=$(sha256sum dist/LinkpearlSync.zip | cut -d' ' -f1)
+          {
+            echo "API_LEVEL=$API_LEVEL"
+            echo "URL=$URL"
+            echo "ASSEMBLY=$ASSEMBLY"
+            echo "SHA256=$SHA256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Attester la provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-path: dist/LinkpearlSync.zip
+
+      - name: Créer la release en brouillon
+        # Les releases du dépôt sont immuables : une fois publiée, une release
+        # ne reçoit plus d'asset. On la crée donc en brouillon, on y attache le
+        # zip, puis on la publie. Le gh du runner plutôt qu'une action tierce :
+        # une dépendance de moins dans le seul job qui écrit.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA256: ${{ steps.manifest.outputs.SHA256 }}
+        run: |
+          # Un brouillon laissé par une exécution précédente qui a échoué se
+          # remplace ; une release déjà publiée, jamais.
+          if DRAFT=$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$DRAFT" = true ]; then
+              gh release delete "$TAG" --yes
+            else
+              echo "::error::La release $TAG est déjà publiée."
+              exit 1
+            fi
+          fi
+
+          cat > notes.md <<EOF
+          SHA-256 de \`LinkpearlSync.zip\` :
+
+          \`\`\`
+          $SHA256  LinkpearlSync.zip
+          \`\`\`
+
+          Provenance : \`gh attestation verify LinkpearlSync.zip -R $GH_REPO\`
+          EOF
+
+          TITLE="v$VERSION"
+          FLAGS=()
+          if [ "$IS_TEST" = true ]; then
+            TITLE="$TITLE (test)"
+            FLAGS+=(--prerelease)
+          fi
+
+          gh release create "$TAG" dist/LinkpearlSync.zip \
+            --draft --verify-tag \
+            --title "$TITLE" \
+            --notes-file notes.md --generate-notes \
+            "${FLAGS[@]}"
+
+      - name: Publier la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          URL: ${{ steps.manifest.outputs.URL }}
+          SHA256: ${{ steps.manifest.outputs.SHA256 }}
+        # L'adresse releases/download/<tag>/ ne répond qu'une fois la release
+        # publiée : repo.json n'est écrit qu'après, et seulement si ce qu'elle
+        # sert est bien le zip attesté.
+        run: |
+          gh release edit "$TAG" --draft=false
+          for _ in 1 2 3 4 5; do
+            if curl -fsSL --retry 3 -o served.zip "$URL"; then break; fi
+            sleep 10
+          done
+          SERVED=$(sha256sum served.zip | cut -d' ' -f1)
+          if [ "$SERVED" != "$SHA256" ]; then
+            echo "::error::La release sert $SERVED, attendu $SHA256 : repo.json n'est pas touché."
+            exit 1
+          fi
 
       - name: Mettre à jour le manifeste du dépôt
-        shell: pwsh
-        # Même raison qu'à la compilation : rien de ce qui vient du tag n'est
-        # interpolé dans le script.
         env:
-          VERSION: ${{ steps.tag.outputs.VERSION }}
-          IS_TEST: ${{ steps.tag.outputs.IS_TEST }}
-          REPOSITORY: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
+          API_LEVEL: ${{ steps.manifest.outputs.API_LEVEL }}
+          URL: ${{ steps.manifest.outputs.URL }}
+          ASSEMBLY: ${{ steps.manifest.outputs.ASSEMBLY }}
+        # Toutes les valeurs passent par --arg : rien de ce qui vient du tag
+        # n'est interpolé dans le programme jq.
         run: |
-          $v      = $env:VERSION
-          $isTest = $env:IS_TEST -eq "true"
-          $base   = "https://github.com/$env:REPOSITORY/releases/download/$env:TAG"
-
-          $entry = (Get-Content repo.json -Raw | ConvertFrom-Json)[0]
-
-          # Le niveau d'API vient du manifeste que le SDK vient de générer :
-          # le coder en dur ici le ferait mentir au prochain changement.
-          $manifest = Get-Content Linkpearl/bin/Release/LinkpearlSync/LinkpearlSync.json -Raw | ConvertFrom-Json
-          $entry.DalamudApiLevel = $manifest.DalamudApiLevel
-          $entry | Add-Member -MemberType NoteProperty -Name TestingDalamudApiLevel `
-                              -Value $manifest.DalamudApiLevel -Force
-
           # Sans LastUpdate, Dalamud date l'entrée de 1970 et la relègue en bas
           # de son onglet des nouveautés.
-          $entry.LastUpdate = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+          NOW=$(date -u +%s)
 
-          if ($isTest) {
-            # Le canal stable n'est pas touché : une version de test ne doit
-            # atteindre que ceux qui les ont demandées.
-            $entry.TestingAssemblyVersion = "$v.0"
-            $entry.DownloadLinkTesting    = "$base/LinkpearlSync.zip"
-          } else {
-            $entry.AssemblyVersion        = "$v.0"
-            $entry.TestingAssemblyVersion = "$v.0"
-            $entry.DownloadLinkInstall    = "$base/LinkpearlSync.zip"
-            $entry.DownloadLinkUpdate     = "$base/LinkpearlSync.zip"
-            $entry.DownloadLinkTesting    = "$base/LinkpearlSync.zip"
-          }
+          # Les $ des programmes jq sont des variables jq, pas du shell.
+          # shellcheck disable=SC2016
 
-          ConvertTo-Json @($entry) -Depth 10 | Set-Content repo.json
+          if [ "$IS_TEST" = true ]; then
+            # Le canal stable n'est pas touché, son niveau d'API compris : une
+            # version de test ne doit atteindre que ceux qui les ont demandées.
+            FILTER='.[0] |= (
+              .TestingAssemblyVersion = $assembly
+              | .TestingDalamudApiLevel = $api
+              | .DownloadLinkTesting = $url
+              | .LastUpdate = $now)'
+          else
+            FILTER='.[0] |= (
+              .AssemblyVersion = $assembly
+              | .TestingAssemblyVersion = $assembly
+              | .DalamudApiLevel = $api
+              | .TestingDalamudApiLevel = $api
+              | .DownloadLinkInstall = $url
+              | .DownloadLinkUpdate = $url
+              | .DownloadLinkTesting = $url
+              | .LastUpdate = $now)'
+          fi
+
+          jq --arg assembly "$ASSEMBLY" --arg url "$URL" \
+             --argjson api "$API_LEVEL" --argjson now "$NOW" \
+             "$FILTER" main/repo.json > repo.json.new
+
+          # Le fichier entier repasse les règles d'écriture, entrées non
+          # touchées comprises : c'est lui que le site recopie.
+          jq -e '
+            def release_url:
+              type == "string"
+              and test("^https://github\\.com/LinkPearl-Sync/linkpearl-sync-plugin/releases/download/v[0-9]+\\.[0-9]+\\.[0-9]+(-test)?/LinkpearlSync\\.zip$");
+            def assembly_version:
+              type == "string" and test("^[0-9]+(\\.[0-9]+){3}$");
+            type == "array" and length > 0 and all(.[];
+              (.AssemblyVersion | assembly_version)
+              and (.TestingAssemblyVersion | . == null or assembly_version)
+              and ([to_entries[] | select(.key | startswith("DownloadLink")) | .value | release_url] | all))
+          ' repo.json.new > /dev/null || { echo "::error::repo.json produit refusé."; exit 1; }
+
+          mv repo.json.new main/repo.json
+          git -C main diff
 
       - name: Enregistrer le manifeste sur main
-        shell: bash
-        env:
-          TAG: ${{ github.ref_name }}
         run: |
-          # Le tag est détaché : on reporte le manifeste sur main, sinon la
-          # prochaine publication repartirait de l'ancien.
+          cd main
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git fetch origin main
-          git stash push repo.json
-          git checkout main
-          git stash pop
-
           git add repo.json
-          git diff --staged --quiet || git commit -m "chore: manifeste du dépôt pour $TAG"
-          git push origin main
+          git diff --staged --quiet && exit 0
+          git commit -m "chore: manifeste du dépôt pour $TAG"
+          # main a pu avancer depuis l'extraction : on se replace dessus, une
+          # fois. Le groupe de concurrence écarte les autres publications, donc
+          # un conflit sur repo.json signale un humain qui l'a touché.
+          git push origin HEAD:main || { git pull --rebase origin main && git push origin HEAD:main; }
 
       - name: Republier le site
-        shell: bash
         # Dalamud lit repo.json sur linkpearl-sync.github.io, qui en sert une
         # copie reprise d'ici. Sans ce déclenchement, la nouvelle version n'y
         # apparaîtrait qu'au passage horaire du site. GITHUB_TOKEN ne peut pas

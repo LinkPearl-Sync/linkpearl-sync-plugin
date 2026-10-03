@@ -3,6 +3,13 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
+
+    <!-- Les versions résolues sont figées dans packages.lock.json, avec
+         l'empreinte de chaque paquet : la CI restaure en mode verrouillé, donc
+         un paquet republié sous le même numéro, ou une dépendance transitive
+         qui glisse, fait échouer la restauration au lieu de s'exécuter. Le
+         plugin l'a déjà, par le SDK Dalamud. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <RootNamespace>Linkpearl.Harness</RootNamespace>
     <ServerGarbageCollection>false</ServerGarbageCollection>
   </PropertyGroup>
