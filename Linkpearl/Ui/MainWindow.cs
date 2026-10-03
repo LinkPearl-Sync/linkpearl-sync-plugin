@@ -159,8 +159,24 @@ public sealed class MainWindow : ThemedWindow
         var fullScreen = _cacheKeeper.State is CacheGateState.Missing ? DrawCacheMissing : (Action?)null;
 
         _shell.Draw(out var closeRequested, Status(), fullScreen);
-        _cacheChooser.DrawDialogs();
-        _backup.DrawDialogs();
+
+        // Les dialogues héritent du thème de la fenêtre, fond natif effacé et
+        // marge nulle compris. Sans la nuit, que seule Draw peint, le dialogue
+        // restait transparent et laissait lire la fenêtre sous lui (vu en jeu
+        // le 3 octobre) : on leur rend un fond et une marge.
+        var dialogs = new ThemeStack()
+            .Color(ImGuiCol.WindowBg, Theme.BgBase)
+            .Var(ImGuiStyleVar.WindowPadding, Theme.S(Theme.PadWindowX, Theme.PadWindowY));
+
+        try
+        {
+            _cacheChooser.DrawDialogs();
+            _backup.DrawDialogs();
+        }
+        finally
+        {
+            dialogs.PopAll();
+        }
 
         if (closeRequested)
             IsOpen = false;
