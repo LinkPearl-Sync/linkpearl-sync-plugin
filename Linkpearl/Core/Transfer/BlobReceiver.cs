@@ -45,8 +45,14 @@ public sealed record ReceiveOutcome(
 /// Une faute sur un tronçon abandonne le blob entier : jamais d'apparence
 /// partielle, ni de fichier à moitié juste.
 /// </remarks>
+/// <param name="requested">
+/// Ce que notre plan a demandé, et la taille que le manifeste annonçait pour
+/// chacun. Une annonce de blob doit porter exactement cette taille : c'est sur
+/// elle que le manifeste a été jugé, et un pair qui la changerait en route
+/// ferait réserver bien plus que ce que la validation a accepté.
+/// </param>
 public sealed class BlobReceiver(
-    IBlobStore store, Quotas quotas, IReadOnlySet<BlobHash> requested, int maxConcurrent = 64)
+    IBlobStore store, Quotas quotas, IReadOnlyDictionary<BlobHash, long> requested, int maxConcurrent = 64)
     : IAsyncDisposable
 {
     private sealed class Assembly
@@ -105,11 +111,14 @@ public sealed class BlobReceiver(
 
         var (hash, size, offset, length) = BlobSegments.ReadStart(payload.Span);
 
-        if (requested.Contains(hash) is false)
+        if (requested.TryGetValue(hash, out var expectedSize) is false)
             return ReceiveOutcome.Refused($"blob non demandé : {hash}");
 
         if (size < 0 || size > quotas.MaxBlobBytes)
             return ReceiveOutcome.Refused($"taille hors plafond ({size}, plafond {quotas.MaxBlobBytes})");
+
+        if (size != expectedSize)
+            return ReceiveOutcome.Refused($"taille annoncée {size} pour {hash}, le manifeste disait {expectedSize}");
 
         if (BlobSegments.IsValid(size, offset, length) is false)
             return ReceiveOutcome.Refused($"tronçon hors découpage ({offset}+{length} pour {size} octets)");

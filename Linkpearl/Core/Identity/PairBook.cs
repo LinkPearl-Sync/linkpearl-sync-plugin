@@ -154,10 +154,17 @@ public sealed record PairRecord
 /// Le service de rendez-vous n'a aucun rôle dans cette décision. Il peut
 /// refuser son service ou mentir sur une adresse, ce qui produit un échec de
 /// connexion ; il ne peut pas faire accepter un pair.
+///
+/// Lu et écrit depuis l'interface, la boucle de présence, le pool et le tic du
+/// moteur. Chaque accès passe donc par un verrou, et chaque lecture rend une
+/// copie : une pause posée depuis l'interface pendant que le tic note un
+/// passage était sinon perdue, l'un réécrivant l'entrée lue avant l'autre, et
+/// deux écritures simultanées pouvaient corrompre le dictionnaire.
 /// </remarks>
 public sealed class PairBook(IClock clock)
 {
     private readonly Dictionary<PeerId, PairRecord> _pairs = [];
+    private readonly Lock _gate = new();
 
     /// <summary>
     /// Durée pendant laquelle on cherche à prévenir un pair retiré.
@@ -170,18 +177,28 @@ public sealed class PairBook(IClock clock)
     public static readonly TimeSpan RevocationLifetime = TimeSpan.FromDays(30);
 
     /// <summary>Tout le carnet, retraits en attente compris : ce qui s'enregistre.</summary>
-    public IReadOnlyCollection<PairRecord> All => _pairs.Values;
+    public IReadOnlyCollection<PairRecord> All => Snapshot(_ => true);
 
     /// <summary>Ce que l'utilisateur voit : un pair retiré n'est plus le sien.</summary>
-    public IReadOnlyList<PairRecord> Listed => [.. _pairs.Values.Where(p => p.Trust is not PairTrust.Revoked)];
+    public IReadOnlyList<PairRecord> Listed => Snapshot(p => p.Trust is not PairTrust.Revoked);
 
-    public IEnumerable<PairRecord> Active =>
-        _pairs.Values.Where(p => p.Trust is PairTrust.Accepted && p.Paused is false);
+    public IEnumerable<PairRecord> Active => Snapshot(p => p.Trust is PairTrust.Accepted && p.Paused is false);
 
     /// <summary>Les pairs retirés qu'il reste à prévenir.</summary>
-    public IEnumerable<PairRecord> Revoked => _pairs.Values.Where(p => p.Trust is PairTrust.Revoked);
+    public IEnumerable<PairRecord> Revoked => Snapshot(p => p.Trust is PairTrust.Revoked);
 
-    public PairRecord? Find(PeerId id) => _pairs.GetValueOrDefault(id);
+    public PairRecord? Find(PeerId id)
+    {
+        lock (_gate)
+            return _pairs.GetValueOrDefault(id);
+    }
+
+    /// <summary>Une copie filtrée, prise sous le verrou : l'appelant l'énumère sans lui.</summary>
+    private PairRecord[] Snapshot(Func<PairRecord, bool> keep)
+    {
+        lock (_gate)
+            return [.. _pairs.Values.Where(keep)];
+    }
 
     public PairRecord? Find(ReadOnlySpan<byte> publicKey) => Find(PeerId.Of(publicKey));
 
@@ -204,7 +221,9 @@ public sealed class PairBook(IClock clock)
             PairedAt = clock.UtcNow,
         };
 
-        _pairs[record.Id] = record;
+        lock (_gate)
+            _pairs[record.Id] = record;
+
         return record;
     }
 
@@ -232,7 +251,11 @@ public sealed class PairBook(IClock clock)
 
     public void Seen(PeerId id) => Update(id, record => record with { LastSeenAt = clock.UtcNow });
 
-    public bool Remove(PeerId id) => _pairs.Remove(id);
+    public bool Remove(PeerId id)
+    {
+        lock (_gate)
+            return _pairs.Remove(id);
+    }
 
     /// <summary>Retire un pair de la liste, en gardant de quoi le prévenir.</summary>
     public void Revoke(PeerId id)
@@ -242,16 +265,19 @@ public sealed class PairBook(IClock clock)
     /// <returns>Le nombre d'entrées oubliées, pour savoir s'il faut enregistrer.</returns>
     public int ForgetStaleRevocations()
     {
-        var stale = _pairs.Values
-            .Where(p => p.Trust is PairTrust.Revoked
-                     && clock.UtcNow - (p.RevokedAt ?? p.PairedAt) > RevocationLifetime)
-            .Select(p => p.Id)
-            .ToList();
+        lock (_gate)
+        {
+            var stale = _pairs.Values
+                .Where(p => p.Trust is PairTrust.Revoked
+                         && clock.UtcNow - (p.RevokedAt ?? p.PairedAt) > RevocationLifetime)
+                .Select(p => p.Id)
+                .ToList();
 
-        foreach (var id in stale)
-            _pairs.Remove(id);
+            foreach (var id in stale)
+                _pairs.Remove(id);
 
-        return stale.Count;
+            return stale.Count;
+        }
     }
 
     /// <summary>Oublie tout, au changement de personnage.</summary>
@@ -261,7 +287,11 @@ public sealed class PairBook(IClock clock)
     /// des pairs que le nouveau n'a jamais rencontrés, ni les réécrire dans son
     /// fichier à lui.
     /// </remarks>
-    public void Clear() => _pairs.Clear();
+    public void Clear()
+    {
+        lock (_gate)
+            _pairs.Clear();
+    }
 
     /// <summary>
     /// Décide si une clé publique reçue dans un handshake est acceptable.
@@ -290,27 +320,46 @@ public sealed class PairBook(IClock clock)
     {
         var id = PeerId.Of(publicKey);
 
-        if (Find(id) is not { Trust: PairTrust.Pending or PairTrust.Accepted } record)
-            return false;
+        // Lecture et écriture sous le même verrou : apprendre la clé ne doit pas
+        // effacer une pause posée entre les deux.
+        lock (_gate)
+        {
+            if (_pairs.GetValueOrDefault(id) is not { Trust: PairTrust.Pending or PairTrust.Accepted } record)
+                return false;
 
-        if (record.PublicKey is { } known)
-            return known.AsSpan().SequenceEqual(publicKey);
+            if (record.PublicKey is { } known)
+                return known.AsSpan().SequenceEqual(publicKey);
 
-        _pairs[id] = record with { PublicKey = publicKey };
-        return true;
+            _pairs[id] = record with { PublicKey = publicKey };
+            return true;
+        }
     }
 
     public void Load(IEnumerable<PairRecord> records)
     {
-        _pairs.Clear();
+        // Matérialisé hors du verrou : la source pourrait être une requête
+        // paresseuse sur ce carnet même.
+        var loaded = records.ToList();
 
-        foreach (var record in records)
-            _pairs[record.Id] = record;
+        lock (_gate)
+        {
+            _pairs.Clear();
+
+            foreach (var record in loaded)
+                _pairs[record.Id] = record;
+        }
     }
 
+    /// <remarks>
+    /// Lire, transformer et réécrire sous un seul verrou : c'est ce qui empêche
+    /// deux changements simultanés de la même entrée de s'écraser.
+    /// </remarks>
     private void Update(PeerId id, Func<PairRecord, PairRecord> change)
     {
-        if (_pairs.TryGetValue(id, out var record))
-            _pairs[id] = change(record);
+        lock (_gate)
+        {
+            if (_pairs.TryGetValue(id, out var record))
+                _pairs[id] = change(record);
+        }
     }
 }

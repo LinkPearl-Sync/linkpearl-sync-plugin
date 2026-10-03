@@ -35,6 +35,9 @@ public interface IBlobStore
 
     /// <summary>La taille à laquelle une éviction doit redescendre.</summary>
     long EvictionTarget => TotalBytes;
+
+    /// <summary>Le quota du cache, sans limite pour les doublures de test.</summary>
+    long QuotaBytes => long.MaxValue;
 }
 
 /// <summary>

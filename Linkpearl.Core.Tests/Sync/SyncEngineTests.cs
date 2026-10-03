@@ -1078,7 +1078,68 @@ public sealed class SyncEngineTests : IDisposable
         Assert.False(await world.SettleAsync(() => world.BobApplicator.Applied.Count > 0, [], sees, rounds: 300));
     }
 
-    private async Task<TwoEngines> TwoEnginesAsync(PlayerFingerprint? pinOnBob = null, bool withAnimation = false, IServiceBans? bobBans = null)
+    [Fact]
+    public async Task Un_personnage_liste_ne_recoit_plus_notre_apparence()
+    {
+        // Couper un seul sens laissait un banni collecter les mods de qui le
+        // croisait : Alice, qui voit Bob listé, ne lui envoie plus rien.
+        var bans = new SwitchableBans { Listed = true };
+        await using var world = await TwoEnginesAsync(aliceBans: bans);
+
+        IReadOnlyList<VisiblePlayer> sees = [new VisiblePlayer(new GameObjectRef(4, 100), AlicePrint)];
+
+        // La session tient et la présence passe : seul l'envoi est coupé.
+        Assert.True(
+            await world.SettleAsync(() => world.Bob.Statuses.SingleOrDefault()?.View.Fingerprint == AlicePrint, [], sees),
+            "la session ne s'est jamais ouverte : " + world.Describe());
+
+        Assert.False(await world.SettleAsync(() => world.BobStatus().View.Manifest is not null, [], sees, rounds: 200));
+        Assert.Empty(world.BobApplicator.Applied);
+    }
+
+    [Fact]
+    public async Task L_interface_lit_les_etats_pendant_que_le_tic_les_change()
+    {
+        // L'interface lit depuis le thread du jeu, le tic écrit depuis le pool.
+        // Énumérer le dictionnaire des runtimes pendant qu'un pair entre ou
+        // sort levait « collection modifiée » au milieu d'un dessin.
+        await using var world = await TwoEnginesAsync();
+        using var stop = new CancellationTokenSource();
+
+        var reader = Task.Run(() =>
+        {
+            while (stop.IsCancellationRequested is false)
+                _ = world.Bob.Statuses.Count;
+        });
+
+        for (var i = 0; i < 100; i++)
+        {
+            // Pause et reprise : le runtime d'Alice sort du dictionnaire et y revient.
+            world.BobBook.SetPaused(world.AliceId, i % 2 == 0);
+            await world.TickAsync([], []);
+        }
+
+        await stop.CancelAsync();
+        await reader;
+    }
+
+    [Fact]
+    public async Task Sans_permission_d_envoi_notre_apparence_ne_part_pas()
+    {
+        await using var world = await TwoEnginesAsync();
+        world.AliceBook.SetPermissions(world.BobId, PairPermissions.ReceiveAppearance);
+
+        IReadOnlyList<VisiblePlayer> sees = [new VisiblePlayer(new GameObjectRef(4, 100), AlicePrint)];
+
+        Assert.True(
+            await world.SettleAsync(() => world.Bob.Statuses.SingleOrDefault()?.View.Fingerprint == AlicePrint, [], sees),
+            "la session ne s'est jamais ouverte : " + world.Describe());
+
+        Assert.False(await world.SettleAsync(() => world.BobStatus().View.Manifest is not null, [], sees, rounds: 200));
+        Assert.Empty(world.BobApplicator.Applied);
+    }
+
+    private async Task<TwoEngines> TwoEnginesAsync(PlayerFingerprint? pinOnBob = null, bool withAnimation = false, IServiceBans? bobBans = null, IServiceBans? aliceBans = null)
     {
         var alice = CryptoPrimitives.GenerateIdentity();
         var bob = CryptoPrimitives.GenerateIdentity();
@@ -1138,7 +1199,7 @@ public sealed class SyncEngineTests : IDisposable
 
         var aliceEngine = new SyncEngine(
             aliceBook, new MeetingDialer(point), aliceAppearance,
-            new RecordingApplicator(), aliceStore, aliceId, alice, _clock, aliceLog);
+            new RecordingApplicator(), aliceStore, aliceId, alice, _clock, aliceLog, bans: aliceBans);
 
         var bobEngine = new SyncEngine(
             bobBook, new MeetingDialer(point), new FixedAppearance(null, BobPrint), bobApplicator,

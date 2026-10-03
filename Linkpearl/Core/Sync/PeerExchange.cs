@@ -11,13 +11,19 @@ using Linkpearl.Core.Transport;
 namespace Linkpearl.Core.Sync;
 
 /// <summary>Ce que l'on sait d'un pair à un instant donné.</summary>
+/// <param name="ManifestHash">
+/// L'empreinte de <paramref name="Manifest"/>, calculée une fois à la réception.
+/// Le moteur la compare à chaque tic et pour chaque pair : la recalculer là
+/// réencodait le manifeste entier à chaque passage.
+/// </param>
 public sealed record PeerView(
     PlayerFingerprint? Fingerprint,
     CharacterManifest? Manifest,
     BlobHash? AnnouncedManifest,
     long MissingBytes,
     long ReceivedBytes,
-    bool Ready);
+    bool Ready,
+    BlobHash? ManifestHash = null);
 
 /// <summary>
 /// Le dialogue avec un pair : présence, manifeste, blobs.
@@ -38,6 +44,7 @@ public sealed class PeerExchange : IAsyncDisposable
     private readonly Quotas _quotas;
     private readonly int _blockSize;
     private readonly Func<TransientCategories> _receive;
+    private readonly Func<bool> _mayShare;
 
     /// <summary>
     /// Paquets qu'on laisse s'accumuler dans la file d'un canal avant d'attendre.
@@ -50,7 +57,60 @@ public sealed class PeerExchange : IAsyncDisposable
     /// </remarks>
     private const int QueuedPacketsPerChannel = 64;
 
-    private readonly Channel<byte[]> _wanted = Channel.CreateUnbounded<byte[]>();
+    /// <summary>
+    /// Demandes de blobs en attente de service, déjà triées.
+    /// </summary>
+    /// <remarks>
+    /// Bornée : un manifeste au plafond de remplacements tient en huit
+    /// demandes de 256 empreintes, et le double laisse passer une
+    /// réapplication. Au-delà, c'est un pair qui inonde, et ses demandes
+    /// tombent au lieu de s'entasser dans le processus du jeu.
+    /// </remarks>
+    private readonly Channel<IReadOnlyList<BlobHash>> _wanted = Channel.CreateBounded<IReadOnlyList<BlobHash>>(
+        new BoundedChannelOptions(WantQueueCapacity) { FullMode = BoundedChannelFullMode.Wait, SingleReader = true });
+
+    public const int WantQueueCapacity = 16;
+
+    /// <summary>
+    /// Fois qu'un même blob peut être mis en service dans une session.
+    /// </summary>
+    /// <remarks>
+    /// Deux et non un : un blob reçu peut se perdre chez le pair (empreinte
+    /// fausse après une erreur disque, éviction sous la pression du quota), et
+    /// une réapplication le redemande alors légitimement. Sans plafond, un pair
+    /// qui redemande en boucle nous ferait téléverser notre apparence sans fin.
+    /// </remarks>
+    public const int MaxServesPerBlob = 2;
+
+    /// <summary>
+    /// Les blobs du dernier manifeste envoyé à ce pair : les seuls qu'on lui sert.
+    /// </summary>
+    /// <remarks>
+    /// Servir tout ce que le cache contient ferait de nous un oracle (« as-tu
+    /// croisé le joueur qui porte ce mod ? ») et une source des mods des autres
+    /// pairs. Écrit et lu par la seule pompe de la session.
+    /// </remarks>
+    private HashSet<BlobHash> _shared = [];
+
+    /// <summary>Combien de fois chaque blob a été mis en service dans cette session.</summary>
+    private readonly Dictionary<BlobHash, int> _serves = [];
+
+    /// <summary>
+    /// Demandes de manifeste envoyées et pas encore servies.
+    /// </summary>
+    /// <remarks>
+    /// Un manifeste non sollicité est ignoré : chacun coûte une décompression,
+    /// une validation et un plan, et remettait à zéro la réception en cours.
+    /// Un compte et non un drapeau : deux annonces rapprochées font partir deux
+    /// demandes, et la seconde réponse, la plus fraîche, doit passer aussi.
+    /// Incrémenté par le tic (réapplication) comme par la pompe, d'où
+    /// l'accès atomique.
+    /// </remarks>
+    private int _manifestsAwaited;
+
+    /// <summary>Une demande de manifeste arrivée avant la présence du pair, servie à son arrivée.</summary>
+    /// <remarks>Lu et écrit par la seule pompe de la session.</remarks>
+    private bool _requestDeferred;
 
     private BlobReceiver? _receiver;
     private TransferPlan? _plan;
@@ -67,7 +127,7 @@ public sealed class PeerExchange : IAsyncDisposable
     public PeerExchange(
         PeerSession session, IBlobStore store, ILocalAppearance local,
         RateLimiter limiter, int dataChannels, int blockSize, Quotas quotas, ILogSink log,
-        Func<TransientCategories>? receive = null)
+        Func<TransientCategories>? receive = null, Func<bool>? mayShare = null)
     {
         _session = session;
         _store = store;
@@ -78,6 +138,7 @@ public sealed class PeerExchange : IAsyncDisposable
         _quotas = quotas;
         _log = log;
         _receive = receive ?? (() => TransientCategories.All);
+        _mayShare = mayShare ?? (() => true);
     }
 
     public PeerView View { get; private set; } = new(null, null, null, 0, 0, false);
@@ -92,7 +153,9 @@ public sealed class PeerExchange : IAsyncDisposable
 
         (fingerprint ?? default).ToBytes().CopyTo(payload.AsSpan());
 
-        if (manifest is not null)
+        // Sans droit d'envoi, aucune empreinte : même nos changements de
+        // tenue ne regardent pas un pair à qui l'on ne montre rien.
+        if (manifest is not null && _mayShare())
             ManifestCodec.HashOf(manifest).TryWriteTo(payload.AsSpan(PlayerFingerprint.SizeInBytes));
 
         await _session.SendAsync(ChannelPlan.ControlChannel, MessageKind.Hello, payload, ct).ConfigureAwait(false);
@@ -117,8 +180,10 @@ public sealed class PeerExchange : IAsyncDisposable
                 break;
 
             case MessageKind.BlobWant:
-                // Mis en file, et servi ailleurs : voir ServeAsync.
-                _wanted.Writer.TryWrite(message.Payload);
+                // Trié ici, dans l'ordre des trames de contrôle, donc contre le
+                // manifeste que le pair a vraiment reçu ; servi ailleurs, voir
+                // ServeAsync.
+                OnBlobWant(message.Payload);
                 break;
 
             case MessageKind.BlobStart:
@@ -143,13 +208,42 @@ public sealed class PeerExchange : IAsyncDisposable
 
         View = View with { Fingerprint = fingerprint, AnnouncedManifest = announced };
 
+        // Sa demande est arrivée avant sa présence : maintenant qu'on sait qui
+        // il est, on peut décider de lui répondre.
+        if (_requestDeferred)
+        {
+            _requestDeferred = false;
+            await OnManifestRequestAsync(ct).ConfigureAwait(false);
+        }
+
         // Rien ne change : inutile de redemander un manifeste identique, et
         // c'est tout l'intérêt de l'adressage par contenu.
         if (View.Manifest is not null && _receivedHash == announced)
             return;
 
-        await _session.SendAsync(ChannelPlan.ControlChannel, MessageKind.ManifestRequest, ReadOnlyMemory<byte>.Empty, ct)
-                      .ConfigureAwait(false);
+        await RequestManifestAsync(ct).ConfigureAwait(false);
+    }
+
+    private ValueTask RequestManifestAsync(CancellationToken ct)
+    {
+        // Levé avant l'envoi : la réponse peut arriver avant que SendAsync rende.
+        Interlocked.Increment(ref _manifestsAwaited);
+        return _session.SendAsync(ChannelPlan.ControlChannel, MessageKind.ManifestRequest, ReadOnlyMemory<byte>.Empty, ct);
+    }
+
+    /// <summary>Décompte une demande en attente, s'il y en a une.</summary>
+    private bool TryConsumeAwaitedManifest()
+    {
+        while (true)
+        {
+            var awaited = Volatile.Read(ref _manifestsAwaited);
+
+            if (awaited <= 0)
+                return false;
+
+            if (Interlocked.CompareExchange(ref _manifestsAwaited, awaited - 1, awaited) == awaited)
+                return true;
+        }
     }
 
     /// <summary>Redemande le manifeste courant du pair, quoi qu'on en sache.</summary>
@@ -158,15 +252,41 @@ public sealed class PeerExchange : IAsyncDisposable
     /// la réception repart de zéro, blobs manquants compris. Ce que le cache a
     /// déjà ne se retransfère pas.
     /// </remarks>
-    public ValueTask RefreshAsync(CancellationToken ct)
-        => _session.SendAsync(ChannelPlan.ControlChannel, MessageKind.ManifestRequest, ReadOnlyMemory<byte>.Empty, ct);
+    public ValueTask RefreshAsync(CancellationToken ct) => RequestManifestAsync(ct);
 
     private async Task OnManifestRequestAsync(CancellationToken ct)
     {
+        // Pas avant sa présence : c'est elle qui dit quel personnage il est,
+        // et un personnage listé par un service ne reçoit rien. Le moteur
+        // ouvre la réception avant d'annoncer, donc la demande d'un client
+        // honnête devance parfois sa présence : elle attend, elle n'est pas
+        // perdue. Une empreinte nulle compte pour absente : c'est celle d'un
+        // client hors personnage, qui ne peut rien afficher, et un personnage
+        // listé échapperait sinon au contrôle en taisant la sienne.
+        if (View.Fingerprint is not { } known || known == default)
+        {
+            _requestDeferred = true;
+            return;
+        }
+
+        // Pas de permission d'envoi, ou un personnage listé par un service :
+        // rien ne part, et le pair ne peut pas distinguer ce silence de celui
+        // d'un client qui n'a encore rien construit.
+        if (_mayShare() is false)
+        {
+            _shared = [];
+            _log.Debug("Demande de manifeste ignorée : envoi non autorisé vers ce pair.");
+            return;
+        }
+
         var manifest = await _local.CurrentAsync(ct).ConfigureAwait(false);
 
         if (manifest is null)
             return;
+
+        // Retenu avant l'envoi : les demandes de blobs qui suivent la réponse
+        // se trient contre ce manifeste-ci, pas contre le précédent.
+        _shared = manifest.Replacements.Select(r => r.Hash).ToHashSet();
 
         await _session.SendAsync(
             ChannelPlan.ControlChannel, MessageKind.ManifestData, ManifestCodec.Compress(manifest), ct)
@@ -175,6 +295,12 @@ public sealed class PeerExchange : IAsyncDisposable
 
     private async Task OnManifestDataAsync(byte[] payload, CancellationToken ct)
     {
+        if (TryConsumeAwaitedManifest() is false)
+        {
+            _log.Debug("Manifeste non sollicité ignoré.");
+            return;
+        }
+
         if (ManifestCodec.TryDecompress(payload, _quotas, out var manifest, out var why) is false)
         {
             _log.Warning($"Manifeste illisible : {why}");
@@ -187,24 +313,42 @@ public sealed class PeerExchange : IAsyncDisposable
             return;
         }
 
-        _receivedHash = ManifestCodec.HashOf(manifest!);
+        var receivedHash = ManifestCodec.HashOf(manifest!);
 
         // Avant le plan : ce qu'on a bloqué n'est ni téléchargé ni posé.
         var allowed = _receive();
         var kept = TransientPolicy.Filter(manifest!, allowed);
+        var keptHash = receivedHash;
 
         if (ReferenceEquals(kept, manifest) is false)
+        {
             _log.Info($"Manifeste filtré : {manifest!.Replacements.Count - kept.Replacements.Count} entrées écartées ({allowed}).");
+            keptHash = ManifestCodec.HashOf(kept);
+        }
 
         manifest = kept;
 
         var plan = BlobRequestPlanner.Plan(manifest, _store);
+
+        // Rapporté au quota de ce cache-ci, que le plafond absolu du validateur
+        // ignore : une apparence reçue est épinglée tant qu'elle se télécharge
+        // ou s'affiche, et elle doit tenir avec la nôtre sous le quota, sans
+        // quoi l'éviction n'aurait plus rien à retirer.
+        if (plan.MissingBytes + plan.CachedBytes > _store.QuotaBytes / 2)
+        {
+            _log.Warning($"Manifeste refusé : {(plan.MissingBytes + plan.CachedBytes) / 1024 / 1024} Mo, "
+                       + $"plus de la moitié du quota du cache ({_store.QuotaBytes / 1024 / 1024} Mo).");
+            return;
+        }
+
+        _receivedHash = receivedHash;
         _plan = plan;
         _received = 0;
 
         View = View with
         {
             Manifest = manifest,
+            ManifestHash = keptHash,
             MissingBytes = plan.MissingBytes,
             ReceivedBytes = 0,
             Ready = plan.Missing.Count == 0,
@@ -217,7 +361,7 @@ public sealed class PeerExchange : IAsyncDisposable
             return;
 
         await using var receiver = _receiver;
-        _receiver = new BlobReceiver(_store, _quotas, plan.Missing.Select(m => m.Hash).ToHashSet());
+        _receiver = new BlobReceiver(_store, _quotas, plan.Missing.ToDictionary(m => m.Hash, m => m.Size));
 
         await RequestMissingAsync(plan, ct).ConfigureAwait(false);
     }
@@ -256,14 +400,18 @@ public sealed class PeerExchange : IAsyncDisposable
         try
         {
             await foreach (var wanted in _wanted.Reader.ReadAllAsync(ct).ConfigureAwait(false))
-                await OnBlobWantAsync(wanted, ct).ConfigureAwait(false);
+                await ServeWantedAsync(wanted, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
         }
     }
 
-    private async Task OnBlobWantAsync(byte[] payload, CancellationToken ct)
+    /// <summary>
+    /// Trie une demande de blobs : seuls ceux du manifeste envoyé à ce pair,
+    /// et chacun un nombre borné de fois.
+    /// </summary>
+    private void OnBlobWant(byte[] payload)
     {
         if (payload.Length < 2)
             return;
@@ -273,11 +421,52 @@ public sealed class PeerExchange : IAsyncDisposable
         if (payload.Length < 2 + (count * BlobHash.SizeInBytes))
             return;
 
-        var wanted = new List<BlobHash>(count);
+        // Relu à chaque demande : une permission retirée ou un bannissement
+        // arrivé en cours de session coupe le service sans attendre.
+        if (_mayShare() is false)
+        {
+            _log.Debug("Demande de blobs ignorée : envoi non autorisé vers ce pair.");
+            return;
+        }
+
+        var wanted = new List<BlobHash>(Math.Min((int)count, _shared.Count));
+        var refused = 0;
 
         for (var i = 0; i < count; i++)
-            wanted.Add(BlobHash.FromBytes(payload.AsSpan(2 + (i * BlobHash.SizeInBytes), BlobHash.SizeInBytes)));
+        {
+            var hash = BlobHash.FromBytes(payload.AsSpan(2 + (i * BlobHash.SizeInBytes), BlobHash.SizeInBytes));
+            var served = _serves.GetValueOrDefault(hash);
 
+            if (_shared.Contains(hash) is false || served >= MaxServesPerBlob)
+            {
+                refused++;
+                continue;
+            }
+
+            _serves[hash] = served + 1;
+            wanted.Add(hash);
+        }
+
+        // Sans l'empreinte demandée : la redire dans le journal aiderait qui
+        // cherche à savoir ce que contient notre cache.
+        if (refused > 0)
+            _log.Debug($"Demande de blobs : {refused} empreinte(s) hors de notre manifeste ou déjà servies, ignorée(s).");
+
+        if (wanted.Count == 0)
+            return;
+
+        if (_wanted.Writer.TryWrite(wanted) is false)
+        {
+            // Rendues : elles n'ont pas été servies.
+            foreach (var hash in wanted)
+                _serves[hash]--;
+
+            _log.Debug("Demande de blobs ignorée : file de service pleine.");
+        }
+    }
+
+    private async Task ServeWantedAsync(IReadOnlyList<BlobHash> wanted, CancellationToken ct)
+    {
         var sender = new BlobSender(_store, _blockSize);
 
         // Plusieurs blobs de front, un par canal, et jamais plus que de canaux.
@@ -322,6 +511,11 @@ public sealed class PeerExchange : IAsyncDisposable
     private async Task ServeSegmentAsync(
         BlobSender sender, (BlobHash Hash, long Offset, long Length) segment, CancellationToken ct)
     {
+        // Revu à chaque tronçon, pas au milieu : un tronçon commencé se finit,
+        // sans quoi le receveur garderait un canal occupé par un envoi mort.
+        if (_mayShare() is false)
+            return;
+
         // Au moins un octet imputé : un tronçon vide laisserait sinon son canal
         // paraître libre, et un second y partirait en même temps.
         var weight = (int)Math.Max(1, segment.Length);

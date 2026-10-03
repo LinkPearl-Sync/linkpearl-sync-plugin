@@ -242,8 +242,22 @@ public sealed class SyncEngine : IAsyncDisposable
     /// <remarks>Levé depuis le tic, sur le fil du moteur, comme <see cref="PairEnded"/>.</remarks>
     public event Action? BookChanged;
 
+    /// <summary>
+    /// Les runtimes tels que le dernier tic les a laissés, pour l'interface.
+    /// </summary>
+    /// <remarks>
+    /// L'interface lit depuis le thread du jeu pendant que le tic, sur le pool,
+    /// ajoute et retire des runtimes : énumérer le dictionnaire lui-même
+    /// pouvait lever au milieu d'un dessin, ou pire, lire une table en cours de
+    /// réorganisation. Une copie publiée par référence à la fin de chaque tic
+    /// ne se modifie plus jamais.
+    /// </remarks>
+    private volatile KeyValuePair<PeerId, Runtime>[] _published = [];
+
+    private void PublishRuntimes() => _published = [.. _runtimes];
+
     public IReadOnlyList<PeerStatus> Statuses =>
-        _runtimes.Where(entry => entry.Value.Revoked is false).Select(entry => new PeerStatus(
+        _published.Where(entry => entry.Value.Revoked is false).Select(entry => new PeerStatus(
             entry.Key,
             entry.Value.Pair.DisplayName,
             entry.Value.Session?.State ?? PeerSessionState.Disconnected,
@@ -297,6 +311,9 @@ public sealed class SyncEngine : IAsyncDisposable
         }
         finally
         {
+            // Même après une exception : un tic interrompu a pu retirer un
+            // runtime, que l'interface ne doit plus montrer.
+            PublishRuntimes();
             _tickGate.Release();
         }
     }
@@ -326,11 +343,16 @@ public sealed class SyncEngine : IAsyncDisposable
         // annoncé _announcedManifest : un pair peut encore être en train
         // d'en télécharger les blobs, épinglés ici pour ne pas les lui
         // couper sous le pied.
-        var pinned = PinnedBlobs.Of(
-            _runtimes.Values
-                .SelectMany(runtime => new[] { runtime.AppliedValue, runtime.Exchange?.View.Manifest })
-                .Append(ours)
-                .Append(_announcedManifest));
+        //
+        // Ce qui se reçoit encore n'est épinglé que s'il tient sous la cible :
+        // un pair qui annonce plus que le quota ne doit pas empêcher de le
+        // respecter. Au pire, sa réception est à reprendre, jamais un fichier
+        // à l'écran retiré.
+        var pinned = PinnedBlobs.Within(
+            _runtimes.Values.Select(runtime => runtime.AppliedValue).Append(ours).Append(_announcedManifest),
+            _runtimes.Values.Select(runtime => runtime.Exchange?.View.Manifest),
+            _store,
+            _store.EvictionTarget);
 
         var before = _store.TotalBytes;
         await _store.EvictToAsync(_store.EvictionTarget, pinned, ct).ConfigureAwait(false);
@@ -388,6 +410,33 @@ public sealed class SyncEngine : IAsyncDisposable
     }
 
     private TransientCategories EffectiveReceive(Runtime runtime) => GlobalReceive.And(runtime.Pair.Receive);
+
+    /// <summary>
+    /// Vrai si ce pair peut recevoir notre apparence.
+    /// </summary>
+    /// <remarks>
+    /// Lu par la pompe de la session à chaque demande, donc à jour sans
+    /// attendre le tic. Un personnage listé par un service ne reçoit plus rien
+    /// de nous, comme on ne pose plus rien de lui : couper un seul sens
+    /// laissait un banni continuer à collecter les mods de qui le croisait.
+    /// L'empreinte annoncée et l'empreinte épinglée comptent toutes deux : la
+    /// première peut mentir, la seconde manque tant qu'on ne l'a pas vue.
+    /// </remarks>
+    private bool MayShareWith(Runtime runtime)
+    {
+        var pair = runtime.Pair;
+
+        if (pair.Permissions.HasFlag(PairPermissions.SendAppearance) is false)
+            return false;
+
+        if (_bans is null)
+            return true;
+
+        return IsListed(runtime.Exchange?.View.Fingerprint) is false && IsListed(pair.PinnedFingerprint) is false;
+    }
+
+    private bool IsListed(PlayerFingerprint? fingerprint)
+        => fingerprint is { } known && known != default && _bans!.Status(known).Verdict is BanVerdict.Listed;
 
     /// <summary>Même chose, pour le personnage visible qui porte cette empreinte.</summary>
     public void Reapply(PlayerFingerprint fingerprint) => _reapply.Enqueue((null, fingerprint));
@@ -613,7 +662,7 @@ public sealed class SyncEngine : IAsyncDisposable
 
         var exchange = new PeerExchange(
             session, _store, _local, limiter, _settings.DataChannels, _settings.BlockSize, _quotas, _log,
-            () => runtime.Receive);
+            () => runtime.Receive, () => MayShareWith(runtime));
 
         runtime.Receive = EffectiveReceive(runtime);
 
@@ -954,9 +1003,9 @@ public sealed class SyncEngine : IAsyncDisposable
 
             var inSight = matched.TryGetValue(id, out var target);
 
-            if (inSight && runtime.Exchange is { View: { Ready: true, Manifest: { } manifest } })
+            if (inSight && runtime.Exchange is { View: { Ready: true, Manifest: { } manifest } view })
             {
-                var hash = ManifestCodec.HashOf(manifest);
+                var hash = view.ManifestHash ?? ManifestCodec.HashOf(manifest);
 
                 if (runtime.AppliedOn == target && runtime.AppliedManifest == hash)
                     continue;
@@ -1249,6 +1298,7 @@ public sealed class SyncEngine : IAsyncDisposable
             await TearDownAsync(id, runtime, CancellationToken.None).ConfigureAwait(false);
 
         _runtimes.Clear();
+        PublishRuntimes();
         _tickGate.Dispose();
         _life.Dispose();
     }

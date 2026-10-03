@@ -404,4 +404,53 @@ public class PinnedBlobsTests
         Assert.Contains(H("a"), pinned);
         Assert.Contains(H("c"), pinned);
     }
+
+    private static FakeBlobStore Holding(params (string Content, long Size)[] blobs)
+    {
+        var store = new FakeBlobStore();
+
+        foreach (var (content, size) in blobs)
+            store.Add(H(content), size);
+
+        return store;
+    }
+
+    [Fact]
+    public void Ce_qui_est_a_l_ecran_reste_epingle_meme_au_dela_du_budget()
+    {
+        // Penumbra lit ces fichiers : les retirer casserait un personnage affiché.
+        var store = Holding(("a", 500), ("b", 500));
+
+        var pinned = PinnedBlobs.Within([With("a", "b")], [], store, budget: 100);
+
+        Assert.Contains(H("a"), pinned);
+        Assert.Contains(H("b"), pinned);
+    }
+
+    [Fact]
+    public void Une_reception_qui_depasse_le_budget_n_est_pas_epinglee()
+    {
+        // Sans quoi un pair qui annonce plus que le quota, ou dix qui arrivent
+        // ensemble, empêchaient l'éviction de rien retirer.
+        var store = Holding(("ecran", 300), ("leger", 100), ("lourd1", 400), ("lourd2", 400));
+
+        var pinned = PinnedBlobs.Within(
+            [With("ecran")], [With("lourd1", "lourd2"), With("leger")], store, budget: 500);
+
+        Assert.Contains(H("ecran"), pinned);
+        Assert.Contains(H("leger"), pinned);
+        Assert.DoesNotContain(H("lourd1"), pinned);
+        Assert.DoesNotContain(H("lourd2"), pinned);
+    }
+
+    [Fact]
+    public void Un_blob_deja_epingle_ne_compte_pas_deux_fois()
+    {
+        // La réception partage « a » avec l'écran : seul « b » lui coûte.
+        var store = Holding(("a", 400), ("b", 100));
+
+        var pinned = PinnedBlobs.Within([With("a")], [With("a", "b")], store, budget: 500);
+
+        Assert.Contains(H("b"), pinned);
+    }
 }
