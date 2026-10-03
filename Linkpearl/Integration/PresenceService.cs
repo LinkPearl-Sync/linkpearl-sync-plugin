@@ -699,9 +699,11 @@ public sealed class PresenceService : IDisposable
                         contested = Unheld(plan.Own, held.Mine);
                         break;
 
-                    // Un service d'avant : il a coupé après son refus. On
-                    // revient sans réclamer, et on le retient quelques heures
-                    // pour ne pas payer une connexion de plus à chaque ronde.
+                    // Un service d'avant. Ceux déployés coupent après ce refus,
+                    // d'autres gardent la connexion : on repart d'une connexion
+                    // neuve dans les deux cas, sans réclamer, et on le retient
+                    // quelques heures pour ne pas payer une connexion de plus
+                    // à chaque ronde.
                     case MailboxClaimOutcome.NotSupported:
                         await client.DisposeAsync().ConfigureAwait(false);
                         client = null;
@@ -987,7 +989,8 @@ public sealed class PresenceService : IDisposable
     }
 
     /// <summary>
-    /// Demande aux services de nos réglages lesquels de ces joueurs utilisent le plugin.
+    /// Demande aux services de nos réglages lesquels de ces joueurs utilisent
+    /// le plugin, puis à chaque service lesquels sont de nos groupes.
     /// </summary>
     /// <remarks>
     /// Un joueur est détecté dès qu'un seul service reconnaît sa boîte, et
@@ -995,10 +998,11 @@ public sealed class PresenceService : IDisposable
     /// la détection dépendante du plus mal en point ; et le silence d'un service
     /// n'est pas une réponse négative, donc il ne retire personne.
     ///
-    /// Jamais un service connu par la seule politique d'un groupe : chaque
-    /// interrogation lui apprendrait qui se tient autour de nous, et c'est un
-    /// modérateur qui l'a choisi, pas nous. Personne n'y tient d'ailleurs sa
-    /// boîte personnelle.
+    /// La détection par boîte personnelle, jamais chez un service connu par
+    /// la seule politique d'un groupe : l'adresse personnelle se calcule
+    /// depuis le nom, et chaque interrogation lui apprendrait qui se tient
+    /// autour de nous. Ce service-là n'est interrogé que par les adresses de
+    /// présence de ses groupes (voir <see cref="GroupPresenceQueries"/>).
     /// </remarks>
     public async Task RefreshDetectionAsync(IReadOnlyList<NearbyPlayer> nearby, CancellationToken ct)
     {
@@ -1006,15 +1010,14 @@ public sealed class PresenceService : IDisposable
             return;
 
         var connected = Snapshot().Where(session => session.Client is not null).ToList();
-        var settings = connected.Where(session => session.Settings).ToList();
 
-        if (settings.Count == 0)
+        if (connected.Count == 0)
             return;
 
         var seenSomewhere = new HashSet<PlayerFingerprint>();
         var answered = false;
 
-        foreach (var session in settings)
+        foreach (var session in connected.Where(session => session.Settings))
         {
             // Le serveur plafonne les interrogations : on découpe plutôt que de
             // se faire refuser.
@@ -1056,60 +1059,52 @@ public sealed class PresenceService : IDisposable
         }
 
         // Rien de retiré tant que personne n'a répondu : perdre tout le monde
-        // parce que le réseau a hoqueté ferait clignoter la liste.
-        if (answered is false)
-            return;
-
-        foreach (var player in nearby)
+        // parce que le réseau a hoqueté ferait clignoter la liste. Les groupes,
+        // eux, s'interrogent quand même : un service de groupe ne dépend pas
+        // de la détection.
+        if (answered)
         {
-            if (seenSomewhere.Contains(player.Fingerprint))
-                _detected[player.Fingerprint] = _clock.UtcNow;
-            else
-                _detected.TryRemove(player.Fingerprint, out _);
+            foreach (var player in nearby)
+            {
+                if (seenSomewhere.Contains(player.Fingerprint))
+                    _detected[player.Fingerprint] = _clock.UtcNow;
+                else
+                    _detected.TryRemove(player.Fingerprint, out _);
+            }
         }
 
         await RefreshGroupPresenceAsync(nearby, connected, ct).ConfigureAwait(false);
     }
 
     /// <summary>
-    /// Demande, pour chaque joueur détecté, s'il est membre de l'un de nos groupes.
+    /// Demande, pour chaque joueur visible, s'il est membre de l'un de nos groupes.
     /// </summary>
     /// <remarks>
-    /// Seulement les joueurs détectés : un passant sans le plugin n'a pas de
-    /// boîte de groupe, et l'interroger ne ferait que coûter au service. Un
-    /// joueur qui a coupé la détection n'est donc pas trouvé par ses groupes,
-    /// ce que l'interface devra dire.
+    /// Aux services de nos réglages, seulement pour les joueurs détectés ; aux
+    /// services d'un groupe, pour tous les joueurs visibles, par les seules
+    /// adresses de ce groupe. Voir <see cref="GroupPresenceQueries"/>. Le
+    /// rythme est celui de la détection, qui appelle ceci.
     /// </remarks>
     private async Task RefreshGroupPresenceAsync(
         IReadOnlyList<NearbyPlayer> nearby, List<Session> connected, CancellationToken ct)
     {
         var groups = _groups;
-        var detected = nearby.Where(player => _detected.ContainsKey(player.Fingerprint)).ToList();
 
-        if (groups.Count == 0 || detected.Count == 0)
+        if (groups.Count == 0)
         {
             _groupPresence.Clear();
             return;
         }
 
-        var questions = detected
-            .SelectMany(player => groups.Select(group => (
-                player.Fingerprint,
-                Group: group.Id,
-                group.Rendezvous,
-                Address: GroupDerivation.PresenceAddress(group.Secret, player.Fingerprint, _clock.UtcNow).ToBytes())))
-            .ToList();
+        var visible = nearby.Select(player => player.Fingerprint).ToList();
+        var detected = visible.Where(_detected.ContainsKey).ToHashSet();
 
         var found = new HashSet<(PlayerFingerprint Member, GroupId Group)>();
         var answered = false;
 
         foreach (var session in connected)
         {
-            // Un service de groupe n'entend parler que de ses groupes : les
-            // adresses des autres lui apprendraient au moins combien nous en avons.
-            var asked = session.Settings
-                ? questions
-                : [.. questions.Where(question => question.Rendezvous.Contains(session.At))];
+            var asked = GroupPresenceQueries.For(session.At, session.Settings, groups, visible, detected, _clock.UtcNow);
 
             foreach (var batch in asked.Chunk(RendezvousWire.MaxQueriedAddresses))
             {
@@ -1129,7 +1124,7 @@ public sealed class PresenceService : IDisposable
 
                     for (var i = 0; i < batch.Length && i < present.Length; i++)
                         if (present[i])
-                            found.Add((batch[i].Fingerprint, batch[i].Group));
+                            found.Add((batch[i].Member, batch[i].Group));
                 }
                 catch (Exception e)
                 {

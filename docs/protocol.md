@@ -187,8 +187,8 @@ ouvertes par `MailboxOpen`.
   deux échecs d'affilée (le service peut tenir encore, le temps de s'en
   apercevoir, notre propre connexion d'avant une coupure), le joueur est
   averti une fois dans le chat, et l'interface le dit tant que cela dure.
-- Un service d'avant répond « trame inattendue » et coupe : le client se
-  reconnecte, ouvre ses boîtes par `MailboxOpen` comme avant, sans
+- Un service d'avant répond « trame inattendue », puis coupe ou non selon sa
+  version : le client repart dans les deux cas d'une connexion neuve, ouvre ses boîtes par `MailboxOpen` comme avant, sans
   exclusivité, et ne réessaie la réclamation sur ce service que six heures
   plus tard.
 
@@ -196,7 +196,13 @@ ouvertes par `MailboxOpen`.
 la seule politique d'un groupe, choisi par un modérateur, ne reçoit que les
 boîtes de ce groupe : ni boîte personnelle (sauf pendant une candidature dont
 il porte le code, puisque la réponse du groupe y arrive), ni interrogation de
-détection, ni demande de pairage.
+détection par adresse personnelle, ni demande de pairage. Il est en revanche
+interrogé, au rythme de la détection, sur **tous les joueurs visibles** par
+les adresses de présence des groupes qui le nomment, et d'eux seuls : elles
+dérivent du secret du groupe, et c'est ce qui permet à un cercle qui héberge
+son propre service de trouver ses membres sans partager aucun service des
+réglages. Un service des réglages, lui, n'est interrogé sur les groupes que
+pour les joueurs qu'il a détectés (`Core/Groups/GroupPresenceQueries.cs`).
 
 Le demandeur dépose dans la boîte de la cible, **sur tous les services de sa
 propre liste** puisqu'il ignore lequel la cible emploie :
@@ -1141,6 +1147,13 @@ S'y ajoute, au pairage, tout le contenu des demandes (voir
 la clé du candidat (voir [Groupes privés](#groupes-privés)), et en permanence l'existence de votre boîte, dont
 l'adresse se calcule depuis votre nom : le service sait qui est en ligne et
 quand.
+
+**L'opérateur d'un service de groupe qui est membre du groupe** connaît son
+secret : il peut recalculer, depuis les noms qu'il essaie, les adresses de
+présence qu'on lui demande. Il apprend donc quels membres du groupe sont
+autour de nous, et quand. Un opérateur qui n'est pas membre ne voit que des
+adresses opaques, une par joueur visible et par groupe qui le nomme : leur
+nombre lui dit à peu près combien de joueurs nous entourent.
 
 ## Versionnage
 

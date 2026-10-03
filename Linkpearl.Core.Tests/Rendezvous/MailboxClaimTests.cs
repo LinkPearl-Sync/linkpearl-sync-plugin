@@ -110,10 +110,12 @@ public class MailboxClaimTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => listening);
     }
 
-    [Fact]
-    public async Task Un_service_d_avant_repond_trame_inattendue_et_coupe()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Un_service_d_avant_repond_trame_inattendue_qu_il_coupe_ou_non(bool closeAfter)
     {
-        using var service = new FakeService(_ => [RendezvousWire.Error("trame inattendue")], closeAfter: true);
+        using var service = new FakeService(_ => [RendezvousWire.Error("trame inattendue")], closeAfter);
         await using var client = new RendezvousClient();
         await client.ConnectAsync("127.0.0.1", service.Port, CancellationToken.None);
 

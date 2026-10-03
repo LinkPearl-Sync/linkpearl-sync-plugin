@@ -31,8 +31,9 @@ public abstract record MailboxClaimOutcome
     public sealed record Held(bool[] Mine) : MailboxClaimOutcome;
 
     /// <summary>
-    /// Service d'avant la réclamation : il a répondu « trame inattendue », et
-    /// ferme la connexion derrière. Il faut se reconnecter et ouvrir sans exclusivité.
+    /// Service d'avant la réclamation : il a répondu « trame inattendue ». Les
+    /// services déployés coupent derrière, les suivants non : l'appelant ne
+    /// doit compter ni sur l'un ni sur l'autre, et ouvrir sans exclusivité.
     /// </summary>
     public sealed record NotSupported : MailboxClaimOutcome;
 
