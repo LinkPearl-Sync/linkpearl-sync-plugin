@@ -74,6 +74,8 @@ A **pair** is a player added to your Linkpearl contacts.
 
 That's it: your looks are exchanged whenever you are within range of each other.
 
+Pairing is done face to face: **Accepter** (accept) stays greyed out while the requester is out of sight, and an answer from a player you cannot see is ignored. If two different answers arrive under the same name, Linkpearl cancels the pairing as a precaution: ask again, standing next to each other. If the window warns that your mailbox on a service is held by another connection, and you have no other game open, someone may be trying to intercept your pairing requests.
+
 ### Glyph colours
 
 | Colour | Meaning |
@@ -119,6 +121,8 @@ The code is a door, not a key: on its own, it lets no one in. After excluding so
 
 At the top of the **Groupes** (Groups) page, **Mode public** (public mode) is off by default. The first activation is confirmed with **Activer le mode public** (enable public mode). You then see the modded appearance of every visible player who enabled it, and they see yours, with no code and no pairing, even if you do not know one another. These strangers' animations, visual effects (VFX), and sounds are off by default. The **Animations**, **VFX**, and **Sons** (sounds) buttons turn them back on for everyone in public mode; under **Joueurs rencontrés** (players met), a player's effects button sets them for that player alone, and **Suivre le mode public** (follow public mode) restores the shared setting. **Bloquer** (block), in two clicks, stops all appearance sharing with that player; the **Bloqués** (blocked) list lets you **Débloquer** (unblock). Disabling public mode keeps your blocks for next time.
 
+Linkpearl cannot prove that a stranger in public mode really plays the character they show, not even for a player who does not use the plugin: block any look that seems hijacked. Unblocking frees the character first; the blocked Linkpearl identity stays in the list (**identité Linkpearl bloquée**, blocked Linkpearl identity) until you unblock it too.
+
 ### Services' ban lists
 
 Each rendezvous service can publish a list of banned characters. A character listed by one of your services is not paired, not admitted into your groups, not seen through public mode, and their appearance is not applied on your side, even if they are one of your pairs. Their row carries the **bloqué par un service** (blocked by a service) chip, with the reason on hover. Such a list is a matter of reputation, not proof: removing a service from your settings lifts its bans.
@@ -129,7 +133,8 @@ Each rendezvous service can publish a list of banned characters. A character lis
 
 - Your files leave your game only for the peers you accepted, end-to-end encrypted.
 - For two players to find each other, Linkpearl goes through a **rendezvous service**. It never sees your files or your looks. It does see pairing requests go by, with the characters' names and public keys, and the IP addresses of those who use it.
-- If you keep **Être visible par les autres joueurs** (let other players see me, on by default), the service can know that your character is online: that is what lets others recognise you. You can turn it off in **Réglages > Visibilité** (Settings > Visibility).
+- If you keep **Être visible par les autres joueurs** (let other players see me, on by default), the service can know that your character is online, and so can anyone who asks it about your character's name: that is what lets others recognise you. You can turn it off in **Réglages > Visibilité** (Settings > Visibility).
+- The connection to the rendezvous service is not encrypted. Someone who controls your network (a public Wi-Fi, for instance) sees what the service sees, and could slip in during a first pairing just as a dishonest service could. Sessions between players stay end-to-end encrypted, and a pair already accepted cannot be impersonated.
 - Joining a group also goes through the rendezvous service, which sees the code and the character's name and world. As with pairing, trust is established on first contact: for a group with a password, a long password is what really protects it.
 - You can host your own rendezvous service in one command: see [Host a rendezvous](https://linkpearl-sync.github.io/heberger.html) (Linux with systemd; the server then updates itself), or the [step-by-step guide](https://linkpearl-sync.github.io/expert.html#self-host). You and your friends just need to share at least one. By default a new service also applies to the open network, and joins it after 72 hours of reliable answers (`--no-announce` to stay out).
 

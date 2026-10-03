@@ -71,6 +71,8 @@ Un **pair** est un joueur ajouté à vos contacts Linkpearl.
 
 C'est tout : vos apparences s'échangent dès que vous êtes à portée l'un de l'autre.
 
+Le pairage se fait face à face : **Accepter** reste grisé tant que le demandeur est hors de vue, et une réponse d'un joueur que vous ne voyez pas est ignorée. Si deux réponses différentes arrivent au même nom, Linkpearl annule le pairage par prudence : redemandez-le, l'un à côté de l'autre. Si la fenêtre signale que votre boîte aux lettres sur un service est tenue par une autre connexion, et que vous n'avez pas d'autre jeu ouvert, quelqu'un tente peut-être d'intercepter vos demandes de pairage.
+
 ### Les couleurs des icônes
 
 | Couleur | Signification |
@@ -116,6 +118,8 @@ Le code est une porte, pas une clé : seul, il ne fait entrer personne. Après a
 
 En tête de la page **Groupes**, le **Mode public** est désactivé par défaut. La première activation se confirme avec **Activer le mode public**. Vous voyez alors l'apparence moddée de tout joueur visible qui l'a activé, et il voit la vôtre, sans code ni pairage, même si vous ne vous connaissez pas. Les animations, effets visuels (VFX) et sons de ces inconnus sont coupés par défaut. Les boutons **Animations**, **VFX** et **Sons** les rétablissent pour tout le Mode public ; sous **Joueurs rencontrés**, le bouton d'effets d'un joueur le règle à part, et **Suivre le mode public** le ramène au réglage commun. **Bloquer**, en deux clics, arrête tout partage d'apparence avec ce joueur ; la liste **Bloqués** permet de **Débloquer**. Désactiver le Mode public garde vos blocages pour la prochaine fois.
 
+Linkpearl ne peut pas prouver qu'un inconnu du Mode public joue vraiment le personnage qu'il affiche, même pour un joueur qui n'a pas le plugin : bloquez toute apparence qui vous semble usurpée. Débloquer libère d'abord le personnage ; l'identité Linkpearl bloquée reste dans la liste (**identité Linkpearl bloquée**) jusqu'à ce que vous la débloquiez aussi.
+
 ### Listes de bannissement des services
 
 Chaque service de rendez-vous peut publier une liste de personnages bannis. Un personnage listé par l'un de vos services n'est ni pairé, ni admis dans vos groupes, ni vu par le Mode public, et son apparence n'est pas appliquée chez vous, même s'il est dans vos pairs. Sa ligne porte la puce **bloqué par un service**, avec le motif au survol. Une telle liste relève de la réputation, pas de la preuve : retirer un service de vos réglages lève ses bannissements.
@@ -126,7 +130,8 @@ Chaque service de rendez-vous peut publier une liste de personnages bannis. Un p
 
 - Vos fichiers ne quittent votre jeu que vers les pairs que vous avez acceptés, chiffrés de bout en bout.
 - Pour que deux joueurs se trouvent, Linkpearl passe par un **service de rendez-vous**. Il ne voit jamais vos fichiers ni vos apparences. Il voit en revanche passer les demandes de pairage, avec les noms des personnages et leurs clés publiques, ainsi que les adresses IP de ceux qui l'utilisent.
-- Si vous activez **Être visible par les autres joueurs** (réglage par défaut), le service peut savoir que votre personnage est en ligne : c'est ce qui permet aux autres de vous reconnaître. Vous pouvez le désactiver dans **Réglages > Visibilité**.
+- Si vous activez **Être visible par les autres joueurs** (réglage par défaut), le service peut savoir que votre personnage est en ligne, comme quiconque l'interroge sur le nom de votre personnage : c'est ce qui permet aux autres de vous reconnaître. Vous pouvez le désactiver dans **Réglages > Visibilité**.
+- La connexion au service de rendez-vous n'est pas chiffrée. Quelqu'un qui contrôle votre réseau (un wifi public, par exemple) voit ce que voit le service, et pourrait s'intercaler lors d'un premier pairage, comme le pourrait un service malhonnête. Les sessions entre joueurs restent chiffrées de bout en bout, et un pair déjà accepté ne peut pas être usurpé.
 - Rejoindre un groupe passe aussi par le service de rendez-vous, qui voit le code, ainsi que le nom et le monde du personnage. Comme pour le pairage, la confiance s'établit au premier contact : pour un groupe à mot de passe, c'est un mot de passe long qui le protège vraiment.
 - Vous pouvez héberger votre propre service de rendez-vous en une commande : voir [Héberger un rendez-vous](https://linkpearl-sync.github.io/heberger.html#fr) (Linux avec systemd ; le serveur se met ensuite à jour seul), ou le [guide pas à pas](https://linkpearl-sync.github.io/expert.html#self-host). Vous et vos amis devez simplement en partager au moins un. Par défaut, un nouveau service se porte aussi candidat au réseau ouvert, et y entre après 72 heures de réponses fiables (`--no-announce` pour s'en tenir à l'écart).
 

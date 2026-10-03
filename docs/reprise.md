@@ -246,6 +246,21 @@ Pendant les essais en jeu de la refonte, hors du plan :
   limites sont un compromis assumé, plus une condition de diffusion.
 - **Les trames de contrôle de LiteNetLib restent en clair**, donc falsifiables
   par qui connaît l'adresse. Déni de service, pas atteinte à la confidentialité.
+- **Pas de TLS vers le rendez-vous.** Un attaquant actif sur le réseau du
+  joueur a les pouvoirs d'un service malveillant, donc peut s'intercaler au
+  premier contact. Dit dans le README et le tableau de `protocol.md`.
+- **Une boîte personnelle peut être réclamée avant son titulaire**, y compris
+  pour une fenêtre à venir. Le titulaire est alerté et ne reçoit plus ses
+  demandes sur ce service, mais rien ne l'empêche. Un service d'avant les
+  boîtes exclusives n'offre aucune exclusivité.
+- **Dans le Public, rien ne prouve qu'un inconnu joue le personnage qu'il
+  revendique**, même un joueur sans le plugin. Une clé ne tient plus qu'un
+  personnage et un membre épinglé n'est plus évincé, mais une clé neuve ne
+  coûte rien : le blocage reste le seul recours.
+- **Audit de sécurité du 3 octobre** : corrigé dans les deux dépôts, éprouvé
+  sous Linux seulement. À essayer en jeu : la boîte occupée, le bouton
+  Accepter grisé hors de vue, l'avertissement de remplacement d'un pairage,
+  l'état exclu d'un groupe, le déblocage en deux temps.
 
 ## Ce qui attend l'utilisateur en jeu
 

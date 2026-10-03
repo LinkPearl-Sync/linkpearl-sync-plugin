@@ -1080,6 +1080,26 @@ donnée associée = type || canal || compteur
   Une reconnexion refait un handshake complet, avec des clés neuves ; les
   sessions précédentes n'ont plus de clé en mémoire.
 
+### Échange d'apparence
+
+Fichiers : `Core/Sync/PeerExchange.cs`, `Core/Transfer/BlobReceiver.cs`.
+
+- **Un pair ne reçoit un manifeste que s'il l'a demandé.** Un `ManifestData`
+  qui ne répond à aucune de nos demandes est ignoré : sans cela, un pair
+  pouvait en pousser en boucle, chacun détendu jusqu'à son plafond.
+- **On ne répond à une demande de manifeste qu'après le `Hello` du pair**, qui
+  porte l'empreinte de son personnage. Une demande arrivée avant attend : sans
+  empreinte, ni le blocage ni les listes de bannissement ne pouvaient
+  s'appliquer, et un pair banni obtenait notre apparence en demandant tôt.
+- **On ne sert que les fichiers du dernier manifeste envoyé à ce pair.** Le
+  cache contient aussi ce que d'autres nous ont envoyé : le servir disait à
+  qui en connaît l'empreinte que nous avions croisé tel joueur, et livrait ses
+  fichiers.
+- Le réglage d'envoi du pair et les listes de bannissement sont revérifiés à
+  chaque demande de manifeste, de fichier et de tronçon.
+- La taille annoncée au début d'un fichier doit être celle du manifeste, et
+  l'espace disque se réserve pour les fichiers en cours de réception.
+
 ## Lien relayé
 
 Fichier : `Core/Transport/RelayPeerLink.cs`.
@@ -1157,10 +1177,22 @@ Ce qu'un tiers ou un rendez-vous peut faire consommer, et ce qui l'arrête.
 | Bloc de candidats | 4 Kio, 8 adresses | `RendezvousWire`, `CandidateSet` |
 | Trames par adresse et par minute (service public) | 60 | `RendezvousLimits` |
 | Connexions simultanées par adresse (un /64 en IPv6) | 32 | `RendezvousLimits` |
+| Connexions simultanées par /48 en IPv6 | 128 | `RendezvousLimits` |
+| Connexions simultanées au total | 32 768 | `RendezvousLimits` |
+| Session qui ne tient ni boîte, ni attente, ni relais | fermée après 60 s | `RendezvousLimits` |
+| Envoi vers une autre session | 5 s, puis le destinataire est coupé | `RendezvousLimits` |
+| Détenteurs d'une boîte ouverte sans exclusivité | 4 | `RendezvousLimits` |
+| Relais | 4 Gio et 2 h chacun, 16 par adresse | `RendezvousLimits` |
+| Demandes de pairage en attente | 20, une par expéditeur, 10 min | `PairRequestInbox` |
 | Attente d'un partenaire au relais | 30 s côté service, 20 s côté client | `RendezvousLimits`, `PeerConnector` |
 | Trame du handshake attendue | 15 s | `PeerSession` |
 | Trames scellées reçues avant la fin du handshake | 64 trames, 1 Mio | `PeerSession` |
 | Message reconstitué sur le relais | 16 Mio, un seul à la fois | `RelayPeerLink` |
+| Manifeste reçu, une fois détendu | 5 Mio | `ManifestCodec` |
+| Fichiers d'un manifeste, tailles cumulées | 4 Gio, et la moitié du quota du cache | `ManifestValidator`, `PeerExchange` |
+| Manipulations méta Penumbra, une fois détendues | 4 Mio | `GzipBase64`, `ManifestValidator` |
+| État Glamourer, une fois détendu | 2 Mio | `GzipBase64`, `ManifestValidator` |
+| Demandes de fichiers en attente, par session | 16, et deux envois au plus d'un même fichier | `PeerExchange` |
 | Demande de réflexion UDP | 32 octets au moins, plus que toute réponse | `RendezvousClient` |
 | Nouvelle tentative après échec | 5 s, doublée jusqu'à 5 min | `SyncEngineSettings` |
 | Politique de groupe | 16 Kio, 4 services, 16 modérateurs, 256 bannis | `GroupPolicyCodec` |
