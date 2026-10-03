@@ -227,19 +227,13 @@ public static class GroupGovernance
     private static ECDsa ImportGroupKey(GroupRecord group)
     {
         var signing = group.SigningKey ?? throw new InvalidOperationException("seul le propriétaire peut faire cela");
-        var key = ECDsa.Create();
 
-        try
-        {
-            key.ImportPkcs8PrivateKey(signing, out _);
-        }
-        catch (CryptographicException)
-        {
-            key.Dispose();
-            throw new InvalidOperationException("clé du groupe illisible");
-        }
-
-        return key;
+        // La clé arrive aussi d'une sauvegarde : une autre courbe que P-256 y
+        // serait lisible par .NET, puis ferait lever plus loin, à l'encodage
+        // compressé de sa partie publique.
+        return IdentityKeyPair.TryImport(signing, out var key, out _)
+            ? key
+            : throw new InvalidOperationException("clé du groupe illisible");
     }
 
     private static byte[] Validated(GroupPolicy policy, GroupId id, byte[] groupKey)
