@@ -76,6 +76,23 @@ public static class RendezvousKind
 
     /// <summary>Une page de la liste signée v2.</summary>
     public const byte ConsensusV2Page = 0x1C;
+
+    /// <summary>
+    /// Ouvre des boîtes pour cette seule session : personne d'autre ne pourra
+    /// les tenir tant qu'elle les garde.
+    /// </summary>
+    /// <remarks>
+    /// L'adresse d'une boîte personnelle dérive d'un nom public : sans cette
+    /// exclusivité, n'importe quel client l'ouvrait en même temps que son
+    /// titulaire, lisait les demandes qui lui étaient adressées et répondait à
+    /// sa place avant lui. Une requête à part plutôt qu'un drapeau sur
+    /// <see cref="MailboxOpen"/> : un service d'avant répond « trame
+    /// inattendue », et le client sait qu'il n'a pas cette garantie.
+    /// </remarks>
+    public const byte MailboxClaim = 0x1D;
+
+    /// <summary>Réponse : un bit par adresse, levé si la boîte est à nous, baissé si quelqu'un d'autre la tient.</summary>
+    public const byte MailboxClaimed = 0x1E;
 }
 
 /// <summary>Ce qu'un client annonce au rendez-vous.</summary>
@@ -273,6 +290,21 @@ public static class RendezvousWire
         for (var i = 0; i < addresses.Count; i++)
             addresses[i].CopyTo(frame.AsSpan(2 + (i * MailboxAddressSize)));
 
+        return frame;
+    }
+
+    public static byte[] MailboxClaim(IReadOnlyList<byte[]> addresses)
+    {
+        var frame = MailboxOpen(addresses);
+        frame[0] = RendezvousKind.MailboxClaim;
+        return frame;
+    }
+
+    /// <summary>Un bit par adresse réclamée, dans l'ordre de la demande : levé si elle est à nous.</summary>
+    public static byte[] MailboxClaimed(IReadOnlyList<bool> held)
+    {
+        var frame = MailboxPresence(held);
+        frame[0] = RendezvousKind.MailboxClaimed;
         return frame;
     }
 

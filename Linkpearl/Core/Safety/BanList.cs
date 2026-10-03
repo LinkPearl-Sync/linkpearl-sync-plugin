@@ -62,6 +62,8 @@ public sealed class BanList(byte[] salt, BanParameters parameters, IReadOnlyList
 
     public const int MaxReasonLength = 120;
 
+    public const int MaxIterations = 2_000_000;
+
     private const int HashLength = 32;
     private const int MinSaltLength = 16;
 
@@ -183,7 +185,11 @@ public sealed class BanList(byte[] salt, BanParameters parameters, IReadOnlyList
 
             var iterations = document["kdf"]?["iterations"]?.GetValue<int>() ?? 0;
 
-            if (iterations is < 1000 or > 10_000_000)
+            // Plafond à un peu plus de trois fois le défaut : le coût se paie par
+            // joueur visible et par sel, et un service qui l'imposait à dix
+            // millions faisait tourner le processeur du joueur des secondes
+            // durant pour chaque passant.
+            if (iterations is < 1000 or > MaxIterations)
             {
                 rejection = $"coût de dérivation hors bornes ({iterations})";
                 return false;
@@ -207,7 +213,12 @@ public sealed class BanList(byte[] salt, BanParameters parameters, IReadOnlyList
                     return false;
                 }
 
-                var reason = node?["reason"]?.GetValue<string>() ?? "";
+                // Le motif s'affiche en infobulle : ni caractère de contrôle ni
+                // marque de direction, qui retourneraient ou masqueraient le texte.
+                var reason = new string((node?["reason"]?.GetValue<string>() ?? "")
+                    .Where(c => char.IsControl(c) is false
+                             && char.GetUnicodeCategory(c) is not System.Globalization.UnicodeCategory.Format)
+                    .ToArray());
 
                 read.Add(new BanEntry(
                     hash,

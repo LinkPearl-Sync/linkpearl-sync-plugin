@@ -13,7 +13,7 @@ public class CandidateSetTests
     {
         var original = new List<IPEndPoint>
         {
-            End("80.218.180.232", 47251),
+            End("203.0.113.57", 47251),
             End("192.168.1.20", 47251),
             End("2001:db8::1", 47251),
         };
@@ -68,7 +68,7 @@ public class CandidateSetTests
         // en premier.
         var ordered = CandidateSet.InPriorityOrder(
         [
-            End("80.218.180.232", 1),
+            End("203.0.113.57", 1),
             End("192.168.1.20", 2),
             End("2001:db8::1", 3),
         ]);
@@ -81,7 +81,7 @@ public class CandidateSetTests
     {
         // Deux joueurs sous le même toit : le NAT ne laisserait pas forcément
         // revenir un paquet parti vers sa propre adresse publique.
-        var ordered = CandidateSet.InPriorityOrder([End("80.218.180.232", 1), End("192.168.1.20", 2)]);
+        var ordered = CandidateSet.InPriorityOrder([End("203.0.113.57", 1), End("192.168.1.20", 2)]);
 
         Assert.Equal(2, ordered[0].Port);
     }
