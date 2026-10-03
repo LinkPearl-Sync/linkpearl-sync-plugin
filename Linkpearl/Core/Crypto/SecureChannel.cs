@@ -47,6 +47,10 @@ public sealed class SecureChannel
         // scellements qui liraient le même compteur produiraient deux fois le
         // même nonce. En AES-GCM, un nonce réutilisé sous la même clé ne fuit
         // pas seulement les deux messages, il livre de quoi forger.
+        // L'atomicité protège le nonce, pas l'ordre : le receveur refuse un
+        // compteur inférieur au dernier vu, donc l'appelant doit remettre les
+        // trames d'un canal au lien dans l'ordre où elles ont été scellées.
+        // PeerSession le fait sous un verrou par canal.
         var sequence = System.Threading.Interlocked.Increment(ref _sent[channel]);
 
         if (sequence > MaxSequence)
