@@ -1,4 +1,5 @@
 using System.Threading.Channels;
+using Linkpearl.Core.Crypto;
 using Linkpearl.Core.Sync;
 using Linkpearl.Core.Transport;
 using Xunit;
@@ -186,6 +187,78 @@ public class RelayPeerLinkTests
         await pipeA.InjectAsync(new byte[] { 0x7f, 0, 1 });
 
         Assert.Contains("inconnu", await closed.Task.WaitAsync(Patience));
+    }
+
+    private static async Task<string> RejectionOf(params byte[][] frames)
+    {
+        var (_, b, pipeA) = Linked();
+        var closed = new TaskCompletionSource<string>();
+        b.Closed += reason => closed.TrySetResult(reason);
+        _ = Collect(b);
+
+        foreach (var frame in frames)
+            await pipeA.InjectAsync(frame);
+
+        var reason = await closed.Task.WaitAsync(Patience);
+        Assert.False(b.IsOpen);
+        return reason;
+    }
+
+    private static byte[] Fragment(bool last, byte channel, int length)
+    {
+        var frame = new byte[2 + length];
+        frame[0] = last ? (byte)0x01 : (byte)0x00;
+        frame[1] = channel;
+        return frame;
+    }
+
+    [Fact]
+    public async Task Un_canal_hors_bornes_ferme_le_lien()
+    {
+        // Le canal est un octet du réseau : sans borne, un pair ouvrait un
+        // réassemblage sur chacun des 256.
+        Assert.Contains("hors bornes", await RejectionOf(Fragment(false, SecureChannel.MaxChannels, RelayPeerLink.FragmentLength)));
+    }
+
+    [Fact]
+    public async Task Deux_messages_entrelaces_ferment_le_lien()
+    {
+        // L'émetteur envoie un message entier sous son verrou : deux
+        // réassemblages en cours ne peuvent venir que d'un pair hostile, qui
+        // multiplierait ainsi le plafond par le nombre de canaux.
+        Assert.Contains("entrelacés", await RejectionOf(
+            Fragment(false, 1, RelayPeerLink.FragmentLength),
+            Fragment(false, 2, RelayPeerLink.FragmentLength)));
+    }
+
+    [Fact]
+    public async Task Un_fragment_intermediaire_incomplet_ferme_le_lien()
+    {
+        // Des fragments d'un octet feraient enfler la liste sans approcher du
+        // plafond en octets.
+        Assert.Contains("fragment de 1 octets", await RejectionOf(Fragment(false, 1, 1)));
+        Assert.Contains("fragment de", await RejectionOf(Fragment(true, 1, RelayPeerLink.FragmentLength + 1)));
+    }
+
+    [Fact]
+    public async Task Un_message_au_plafond_se_reconstitue()
+    {
+        var (a, b, _) = Linked();
+        var received = Collect(b);
+
+        var payload = new byte[RelayPeerLink.MaxMessageLength];
+        Random.Shared.NextBytes(payload);
+
+        await a.SendAsync(3, payload, CancellationToken.None);
+        await a.SendAsync(4, new byte[] { 9 }, CancellationToken.None);
+
+        var (channel, message) = await received.Reader.ReadAsync().AsTask().WaitAsync(Patience);
+        Assert.Equal(3, channel);
+        Assert.Equal(payload, message);
+
+        var (next, small) = await received.Reader.ReadAsync().AsTask().WaitAsync(Patience);
+        Assert.Equal(4, next);
+        Assert.Equal(new byte[] { 9 }, small);
     }
 
     [Fact]
