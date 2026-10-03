@@ -115,16 +115,15 @@ public static class GroupBookCodec
                 .OfType<RendezvousAddress>()
                 .ToList();
 
+            var id = GroupId.FromBytes(Convert.FromHexString(dto.Id));
+            var isPublic = PublicGroup.Is(id);
 
             var members = (dto.Members ?? [])
                 .Select(RehydrateMember)
                 .OfType<GroupMember>()
-                .Take(GroupBook.MaxMembersPerGroup)
+                .Take(isPublic ? GroupBook.MaxPublicMembers : GroupBook.MaxMembersPerGroup)
                 .GroupBy(member => member.Fingerprint)
                 .ToDictionary(same => same.Key, same => same.First());
-
-            var id = GroupId.FromBytes(Convert.FromHexString(dto.Id));
-            var isPublic = PublicGroup.Is(id);
 
             // Le Public tire ses services de la configuration : il vit sans en
             // avoir d'enregistré. Un groupe privé sans service est injoignable,

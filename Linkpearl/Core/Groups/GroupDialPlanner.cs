@@ -36,7 +36,8 @@ public sealed class GroupDialPlanner(IClock clock)
         IReadOnlyList<GroupSighting> sightings,
         IReadOnlyList<GroupRecord> groups,
         IEnumerable<PlayerFingerprint> directlyPaired,
-        IServiceBans? bans = null)
+        IServiceBans? bans = null,
+        PeerId? ourKey = null)
     {
         // Un listé ne se compose nulle part. Un verdict en attente ne retient
         // que le Public, et seulement pour une composition nouvelle : ses
@@ -44,11 +45,23 @@ public sealed class GroupDialPlanner(IClock clock)
         // admis. Une session en cours ne se coupe pas pour autant, sans quoi
         // la première entrée d'une liste, qui remet tout le monde en attente,
         // ferait clignoter tout un lieu. Voir la décision 3 du plan de l'incrément 3.
+        //
+        // Un groupe dont la politique nous exclut ne compose plus que ceux qui
+        // peuvent lever l'exclusion : le propriétaire et les modérateurs, par
+        // leur clé épinglée. On garde le groupe pour qu'une politique plus
+        // récente puisse nous rattraper, et elle ne voyage que dans une
+        // session : sans personne à composer, elle n'arriverait jamais. Les
+        // autres membres nous refuseraient de toute façon tant qu'ils tiennent
+        // la politique qui nous exclut.
         bool Excluded(GroupRecord group, PlayerFingerprint member, bool composing)
         {
             var status = bans?.Status(member) ?? ServiceBanStatus.Clear;
+            var pinned = group.LivePin(group.Members.GetValueOrDefault(member));
 
-            return group.Refuses(group.Members.GetValueOrDefault(member)?.Id, member)
+            if (group.Excludes(ourKey, ours) && (pinned is not { } key || group.Policy!.IsProtected(key) is false))
+                return true;
+
+            return group.Refuses(pinned, member)
                    || status.Verdict is BanVerdict.Listed
                    || (composing && status.Verdict is BanVerdict.Pending && group.IsPublic);
         }
@@ -123,7 +136,7 @@ public sealed class GroupDialPlanner(IClock clock)
             PairedAt = group.JoinedAt,
             PinnedFingerprint = theirs,
             Receive = group.ReceiveOf(known),
-            Group = new GroupOrigin(group.Id, ours, theirs) { Pinned = known?.Id is not null, Public = group.IsPublic },
+            Group = new GroupOrigin(group.Id, ours, theirs) { Pinned = group.LivePin(known) is not null, Public = group.IsPublic },
         };
     }
 }

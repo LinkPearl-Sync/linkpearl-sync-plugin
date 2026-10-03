@@ -215,6 +215,16 @@ Pendant les essais en jeu de la refonte, hors du plan :
 - **La dissolution n'est relayée que par le propriétaire** : un membre qu'il
   ne croise plus garde le groupe. L'interface lui dit de garder le groupe
   listé jusqu'à ce que les membres l'aient vu.
+- **Un exclu garde le groupe**, exclu, jusqu'à ce qu'une politique plus
+  récente le réintègre ou qu'il le quitte (3 octobre) : sinon un modérateur
+  hostile dissolvait de fait. Le propriétaire qui le refuse ne lui apporte
+  pas la dissolution.
+- **Un carnet de groupe plein refuse les nouveaux venus** au lieu d'oublier
+  un membre épinglé : 256 membres par groupe privé, 2 048 dans le Public.
+  Rien ne permet encore d'oublier un membre à la main.
+- **Dans le Public, un inconnu peut usurper le personnage d'un passant**, même
+  sans plugin : voir « Modèle de confiance » dans `protocol.md`. Débloquer
+  rend le personnage et garde la clé bloquée.
 - **Un joueur qui a coupé la détection n'est pas trouvé par ses groupes.** La
   détection interroge les boîtes de présence ; si elle ne tourne pas, un membre
   en groupe ne sera pas composé, même si sa boîte répond.

@@ -119,6 +119,81 @@ public sealed class PublicGroupTests
     }
 
     [Fact]
+    public void Debloquer_rend_le_personnage_sans_rendre_la_cle()
+    {
+        // L'usurpateur d'un passant est bloqué, puis on débloque le passant :
+        // la clé de l'usurpateur reste refusée sous tout personnage, et le
+        // vrai joueur fait un premier contact neuf au lieu d'être contesté.
+        var book = new GroupBook(_clock);
+        book.SetPublic(true, [Service]);
+        var usurper = FreshKey();
+        var genuine = FreshKey();
+        var carol = PlayerFingerprint.Of("carol", 21);
+
+        Assert.Equal(GroupAdmission.Pinned, book.Admit(PublicGroup.Id, Bob, usurper, "Bob"));
+        book.Block(PublicGroup.Id, Bob);
+
+        // Bloqué : ni le personnage, ni la clé.
+        Assert.Equal(GroupAdmission.Banned, book.Admit(PublicGroup.Id, Bob, genuine, "Bob"));
+        Assert.Equal(GroupAdmission.Banned, book.Admit(PublicGroup.Id, carol, usurper, "Carol"));
+
+        book.Unblock(PublicGroup.Id, Assert.Single(book.Public!.Blocked));
+
+        var residue = Assert.Single(book.Public!.Blocked);
+        Assert.Equal(new GroupBan(PeerId.Of(usurper), null), residue);
+        Assert.Null(book.Public.Members[Bob].Id);
+
+        Assert.Equal(GroupAdmission.Banned, book.Admit(PublicGroup.Id, Bob, usurper, "Bob"));
+        Assert.Equal(GroupAdmission.Banned, book.Admit(PublicGroup.Id, carol, usurper, "Carol"));
+        Assert.Equal(GroupAdmission.Pinned, book.Admit(PublicGroup.Id, Bob, genuine, "Bob"));
+        Assert.Equal(PeerId.Of(genuine), book.Public!.Members[Bob].Id);
+
+        // Second temps : la clé elle-même.
+        book.Unblock(PublicGroup.Id, residue);
+        Assert.Empty(book.Public!.Blocked);
+    }
+
+    [Fact]
+    public void Une_cle_bloquee_seule_ne_tient_plus_son_personnage()
+    {
+        // Un carnet relu où la clé épinglée est bloquée seule : le personnage
+        // doit se libérer comme après Unblock, pour le carnet comme pour le planificateur.
+        var usurper = PeerId.Of(FreshKey());
+        var group = PublicGroup.Create([Service], _clock.UtcNow) with
+        {
+            Members = new Dictionary<PlayerFingerprint, GroupMember>
+            {
+                [Bob] = new() { Fingerprint = Bob, DisplayName = "Bob", Id = usurper },
+            },
+            Blocked = [new GroupBan(usurper, null)],
+        };
+
+        var book = new GroupBook(_clock);
+        book.Load([group]);
+        Assert.Equal(GroupAdmission.Pinned, book.Admit(PublicGroup.Id, Bob, FreshKey(), "Bob"));
+
+        var planned = new GroupDialPlanner(_clock).Plan(
+            PlayerFingerprint.Of("alice", 21), [new GroupSighting(PublicGroup.Id, Bob, "Bob")], [group], []);
+
+        Assert.False(Assert.Single(planned).Group!.Pinned);
+    }
+
+    [Fact]
+    public void Un_Public_desactive_s_enregistre_avec_ses_blocages()
+    {
+        var book = new GroupBook(_clock);
+        book.SetPublic(true, [Service]);
+        book.Block(PublicGroup.Id, Bob);
+        book.SetPublic(false, [Service]);
+
+        var back = Assert.Single(GroupBookCodec.Decode(GroupBookCodec.Encode(book.Stored)));
+
+        Assert.True(back.IsPublic);
+        Assert.True(back.Dormant);
+        Assert.True(back.Refuses(null, Bob));
+    }
+
+    [Fact]
     public void Un_membre_rencontre_suit_le_defaut_jusqu_a_ce_qu_on_le_regle()
     {
         var book = new GroupBook(_clock);

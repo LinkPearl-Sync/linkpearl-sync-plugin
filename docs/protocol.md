@@ -135,6 +135,19 @@ qui passe dans la session SIGMA-I. Un membre du Public est un inconnu : le
 premier contact avec lui est gagnable par qui arrive avant le vrai, comme dans
 tout groupe.
 
+**Dans le Public, Linkpearl ne peut pas prouver qu'un inconnu joue le
+personnage qu'il revendique**, et cela vaut aussi pour un joueur qui n'a pas le
+plugin. Le secret étant public, n'importe qui peut ouvrir la boîte de présence
+Public d'un passant, se faire composer par les membres alentour et épingler sa
+clé sous le personnage de ce passant ; son apparence, n'importe laquelle, se
+pose alors sur ce personnage chez tous ceux qui l'ont croisé ainsi. Les boîtes
+exclusives du service protègent un joueur qui a le plugin et le Public actif,
+puisqu'il tient déjà sa boîte ; elles ne peuvent rien pour celui qui ne l'a
+pas. Aucune preuve de possession d'un personnage n'existe dans le jeu, et
+aucune vérification hors du jeu n'est proposée, par décision. Ce qui borne
+l'usurpation est décrit dans [Groupe Public](#groupe-public) ; la parade
+restante est le blocage local et les listes des services.
+
 **Une liste de bannissement relève de la réputation, pas de la preuve.** Un
 service ne voit aucun contenu, donc il ne peut vérifier aucune accusation.
 Chaque service actif peut imposer sa liste : un seul qui liste un personnage
@@ -532,11 +545,25 @@ services du groupe la suivent) ; plus ancienne, il renvoie la sienne ; même
 contenu, rien. Deux membres qui se croisent repartent avec la même. Un client
 qui ne connaît pas `0x10` l'ignore.
 
-Un membre qui adopte une politique où il est banni, ou une politique dissoute,
-quitte le groupe et le dit au joueur. Il ne la relaie donc pas : **la
-dissolution n'atteint que les membres que le propriétaire croise lui-même**,
-et c'est pourquoi un groupe dissous reste dans la liste du propriétaire
-jusqu'à ce qu'il le retire.
+Un membre qui adopte une politique dissoute quitte le groupe et le dit au
+joueur. Il ne la relaie donc pas : **la dissolution n'atteint que les membres
+que le propriétaire croise lui-même**, et c'est pourquoi un groupe dissous
+reste dans la liste du propriétaire jusqu'à ce qu'il le retire.
+
+Un membre qui adopte une politique où il est banni **ne quitte pas** le groupe :
+il le garde, secret compris, dans un état « exclu » qui se déduit de la
+politique et n'est jamais enregistré à part. Exclu, il n'admet personne, ne
+montre que cet état, et ne compose que les membres dont la clé épinglée est
+protégée par la politique (propriétaire-membre et modérateurs attestés),
+seuls à pouvoir lui apporter une politique plus récente. Une telle politique
+qui ne le bannit plus le réintègre sans autre geste. Sans cela, un modérateur
+hostile qui bannit tous les membres non protégés ferait supprimer le groupe à
+chacun d'eux, et le propriétaire ne pourrait plus en rattraper aucun : une
+dissolution de fait, que les règles réservent au propriétaire. Le groupe ne
+disparaît que par une dissolution signée du propriétaire ou par le départ
+volontaire du joueur. Un exclu pour de bon garde donc le groupe listé jusqu'à
+ce qu'il le quitte : le propriétaire, qui le refuse, ne lui apportera pas la
+dissolution.
 
 ### Gouvernance concurrente
 
@@ -602,6 +629,30 @@ l'a activé aussi, et en est vu.
   transmise. S'y ajoutent les listes de bannissement des services (section
   suivante) ; tant que la vérification d'un joueur visible n'est pas faite, un
   membre du Public n'est pas composé.
+- **Débloquer se fait en deux temps.** Débloquer un joueur libère son
+  personnage et son épinglage, mais garde sa clé bloquée sous tout
+  personnage ; un second déblocage lève la clé. La clé bloquée a pu être celle
+  d'un usurpateur, et le personnage celui d'un passant : le vrai joueur fait
+  alors un premier contact neuf au lieu d'être contesté pour toujours, et
+  l'usurpateur ne revient sous aucun autre personnage avec la même clé. Une
+  clé bloquée seule ne tient plus le personnage sous lequel elle s'était
+  épinglée.
+- **Ce qui borne l'usurpation.** Personne ne peut prouver tenir un personnage
+  (voir [Modèle de confiance](#modèle-de-confiance)) : un usurpateur qui
+  arrive le premier sous le personnage d'un passant, même d'un joueur sans le
+  plugin, y fait épingler sa clé et y pose son apparence. Trois règles, communes
+  à tous les groupes, en limitent la portée. Une clé ne parle que pour un
+  personnage : déjà épinglée sous une autre empreinte, elle est « Contestée »,
+  donc une identité ne se pose pas sur chaque passant tour à tour. Un membre
+  épinglé n'est jamais oublié pour faire de la place : au plafond (256 membres
+  par groupe privé, 2 048 dans le Public), c'est le nouveau venu qui est refusé,
+  pour que remplir le carnet ne rouvre pas le premier contact d'un membre
+  connu. Et un blocage vise la clé autant que le personnage (point
+  précédent). Faire annoncer au pair l'empreinte qu'il revendique n'ajouterait
+  rien : le secret de paire lie déjà les deux empreintes, l'annonce `Hello`
+  doit déjà porter l'empreinte attendue, et un usurpateur qui connaît le secret
+  public annonce ce qu'il veut. Une clé neuve ne coûte rien : l'usurpateur
+  bloqué peut revenir sous un autre personnage avec une autre clé.
 - **Animations, VFX et sons refusés par défaut** pour ses membres, réglables
   pour tout le Public et membre par membre. Ce réglage ne touche que ce qu'on
   reçoit : il ne change rien au fil.

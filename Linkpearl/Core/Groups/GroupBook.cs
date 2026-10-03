@@ -19,13 +19,22 @@ public enum GroupAdmission
     /// <summary>Admis, et épinglé à l'instant : il faut enregistrer.</summary>
     Pinned,
 
-    /// <summary>Une autre clé a déjà été vue pour ce personnage.</summary>
+    /// <summary>
+    /// Une autre clé a déjà été vue pour ce personnage, ou cette clé a déjà
+    /// été vue pour un autre personnage.
+    /// </summary>
     Disputed,
 
     /// <summary>La politique bannit cette clé ou ce personnage.</summary>
     Banned,
 
     UnknownGroup,
+
+    /// <summary>
+    /// Un personnage jamais vu, alors que le groupe a atteint son plafond de
+    /// membres : refusé plutôt que d'oublier un membre déjà épinglé.
+    /// </summary>
+    Full,
 }
 
 /// <summary>Le sort d'une politique proposée. Strictement local.</summary>
@@ -73,14 +82,36 @@ public sealed class GroupBook(IClock clock) : IGroupGate, IGroupPolicies
     /// <summary>Plus qu'une compagnie libre, assez peu pour que la liste reste lisible.</summary>
     public const int MaxMembersPerGroup = 256;
 
+    /// <summary>
+    /// Le Public garde davantage : chaque inconnu croisé y entre, et un
+    /// carnet plein n'y reçoit plus aucun nouveau venu.
+    /// </summary>
+    /// <remarks>
+    /// Aucun membre épinglé n'est jamais oublié pour faire de la place (voir
+    /// <see cref="Admit"/>) : le plafond doit donc couvrir des mois de jeu de
+    /// rôle dans des lieux fréquentés. Une entrée pèse environ 400 octets
+    /// dans <c>groups.json</c>, soit moins d'un mégaoctet au plafond.
+    /// </remarks>
+    public const int MaxPublicMembers = 2048;
+
+    /// <summary>Le plafond de membres de ce groupe.</summary>
+    public static int MemberCap(GroupRecord group) => group.IsPublic ? MaxPublicMembers : MaxMembersPerGroup;
+
     private readonly Lock _gate = new();
     private readonly Dictionary<GroupId, GroupRecord> _groups = [];
 
     /// <summary>Levé hors du verrou, quand quelque chose qui s'enregistre a changé.</summary>
     public event Action? Changed;
 
-    /// <summary>Levé hors du verrou, après <see cref="Changed"/>, quand une politique est adoptée.</summary>
-    public event Action<GroupId>? PolicyAdopted;
+    /// <summary>
+    /// Levé hors du verrou, après <see cref="Changed"/>, quand une politique
+    /// est adoptée, avec celle qu'elle remplace.
+    /// </summary>
+    /// <remarks>
+    /// La précédente dit à l'abonné ce qui vient de changer pour lui : une
+    /// exclusion qui tombe, ou qui se lève, ne se dit qu'une fois.
+    /// </remarks>
+    public event Action<GroupId, GroupPolicy?>? PolicyAdopted;
 
     public IReadOnlyList<GroupRecord> All
     {
@@ -88,6 +119,21 @@ public sealed class GroupBook(IClock clock) : IGroupGate, IGroupPolicies
         {
             lock (_gate)
                 return [.. _groups.Values.Where(group => group.Dormant is false)];
+        }
+    }
+
+    /// <summary>Tout ce qui s'enregistre, Public dormant compris.</summary>
+    /// <remarks>
+    /// <see cref="All"/> écarte le Public désactivé : l'enregistrer à partir
+    /// de là perdrait ses blocages à chaque désactivation, ce que l'état
+    /// dormant existe justement pour éviter.
+    /// </remarks>
+    public IReadOnlyList<GroupRecord> Stored
+    {
+        get
+        {
+            lock (_gate)
+                return [.. _groups.Values];
         }
     }
 
@@ -180,6 +226,8 @@ public sealed class GroupBook(IClock clock) : IGroupGate, IGroupPolicies
     /// </remarks>
     public PolicyOffer OfferPolicy(GroupId id, ReadOnlySpan<byte> encoded)
     {
+        GroupPolicy? previous;
+
         lock (_gate)
         {
             if (TryLive(id, out var group) is false)
@@ -190,6 +238,8 @@ public sealed class GroupBook(IClock clock) : IGroupGate, IGroupPolicies
 
             if (GroupPolicyRules.TryAccept(encoded, id, ownerKey, out var candidate, out _) is false)
                 return PolicyOffer.Invalid;
+
+            previous = group.Policy;
 
             if (group.Policy is { } current && GroupPolicyRules.IsNewer(candidate!, current) is false)
             {
@@ -208,7 +258,7 @@ public sealed class GroupBook(IClock clock) : IGroupGate, IGroupPolicies
         }
 
         Changed?.Invoke();
-        PolicyAdopted?.Invoke(id);
+        PolicyAdopted?.Invoke(id, previous);
         return PolicyOffer.Adopted;
     }
 
@@ -220,7 +270,17 @@ public sealed class GroupBook(IClock clock) : IGroupGate, IGroupPolicies
     /// couple : un membre pourrait se présenter à la place d'un autre. La
     /// première clé vue pour un personnage l'emporte, et toute autre est
     /// contestée. Le premier contact reste gagnable par qui arrive avant le
-    /// vrai ; c'est un prix énoncé dans la spec.
+    /// vrai ; c'est un prix énoncé dans la spec. Dans le Public, dont le secret
+    /// est une constante, ce « vrai » peut même être un passant qui n'a pas le
+    /// plugin : voir la section « Groupe Public » de <c>docs/protocol.md</c>.
+    ///
+    /// Deux règles bornent ce que ce premier contact rapporte. Une clé ne parle
+    /// que pour un personnage : déjà épinglée sous une autre empreinte, elle
+    /// est contestée, sans quoi un seul usurpateur se poserait sur chaque
+    /// passant l'un après l'autre sous la même identité. Et un membre épinglé
+    /// n'est jamais oublié pour faire de la place : l'oublier rouvrirait son
+    /// premier contact à qui sait remplir le carnet. Au plafond, c'est le
+    /// nouveau venu qui est refusé.
     /// </remarks>
     public GroupAdmission Admit(GroupId id, PlayerFingerprint member, byte[] publicKey, string displayName)
     {
@@ -237,13 +297,15 @@ public sealed class GroupBook(IClock clock) : IGroupGate, IGroupPolicies
             if (group.Refuses(key, member))
                 return GroupAdmission.Banned;
 
-            if (group.Members.TryGetValue(member, out var known) && known.Id is { } pinned)
+            // LivePin et non Id : une clé qu'on a bloquée ne tient plus le
+            // personnage, et le carnet relu d'avant Unblock doit finir au
+            // même endroit que celui qu'Unblock vient d'écrire.
+            if (group.Members.TryGetValue(member, out var known) && group.LivePin(known) is { } pinned)
             {
                 // Une clé contestée ne prouve rien : n'importe quel membre connaît le
                 // secret partagé et peut prétendre être n'importe quelle empreinte
                 // avec une clé bidon, sans jamais réussir le handshake. La laisser
-                // rafraîchir LastSeenAt fausserait l'ordre d'éviction de ForgetOldest
-                // sans qu'aucune preuve n'ait été apportée.
+                // rafraîchir LastSeenAt ne servirait qu'à tromper l'interface.
                 if (pinned != key)
                     return GroupAdmission.Disputed;
 
@@ -265,17 +327,19 @@ public sealed class GroupBook(IClock clock) : IGroupGate, IGroupPolicies
             }
             else
             {
-                var members = new Dictionary<PlayerFingerprint, GroupMember>(group.Members);
+                // Une clé, un personnage : voir la remarque.
+                if (group.MemberPinnedTo(key) is not null)
+                    return GroupAdmission.Disputed;
 
-                if (known is not null)
-                {
-                    verdict = GroupAdmission.Pinned;
-                    members[member] = known with { Id = key, PublicKey = publicKey, LastSeenAt = clock.UtcNow };
-                }
-                else
-                {
-                    verdict = GroupAdmission.Pinned;
-                    members[member] = new GroupMember
+                if (known is null && group.Members.Count >= MemberCap(group))
+                    return GroupAdmission.Full;
+
+                var members = new Dictionary<PlayerFingerprint, GroupMember>(group.Members);
+                verdict = GroupAdmission.Pinned;
+
+                members[member] = known is not null
+                    ? known with { Id = key, PublicKey = publicKey, LastSeenAt = clock.UtcNow }
+                    : new GroupMember
                     {
                         Fingerprint = member,
                         Id = key,
@@ -283,10 +347,6 @@ public sealed class GroupBook(IClock clock) : IGroupGate, IGroupPolicies
                         PublicKey = publicKey,
                         LastSeenAt = clock.UtcNow,
                     };
-
-                    if (members.Count > MaxMembersPerGroup)
-                        ForgetOldest(members, spare: member);
-                }
 
                 _groups[id] = group with { Members = members };
                 write = true;
@@ -352,7 +412,9 @@ public sealed class GroupBook(IClock clock) : IGroupGate, IGroupPolicies
     /// </summary>
     /// <remarks>
     /// Les deux : la clé seule laisserait revenir le même joueur sous une clé
-    /// neuve, le personnage seul le laisserait revenir sous un autre.
+    /// neuve, le personnage seul le laisserait revenir sous un autre. Dans le
+    /// Public, celui qu'on bloque peut usurper le personnage d'un autre : c'est
+    /// <see cref="Unblock"/> qui rend le personnage sans rendre la clé.
     /// </remarks>
     public void Block(GroupId id, PlayerFingerprint member)
     {
@@ -368,14 +430,44 @@ public sealed class GroupBook(IClock clock) : IGroupGate, IGroupPolicies
         Changed?.Invoke();
     }
 
+    /// <summary>
+    /// Débloque un personnage, ou une identité dont le personnage est déjà débloqué.
+    /// </summary>
+    /// <remarks>
+    /// En deux temps quand le blocage porte les deux. Débloquer veut dire
+    /// « je veux revoir ce personnage », pas « je refais confiance à cette
+    /// clé » : dans le Public, la clé bloquée a pu être celle d'un usurpateur,
+    /// et le personnage celui d'un passant qui n'y est pour rien. Le personnage
+    /// est donc libéré, et son épinglage avec, pour que la prochaine clé qui
+    /// se présente sous lui fasse un premier contact neuf ; la clé, elle, reste
+    /// bloquée sous tout personnage, jusqu'à un second déblocage. Sans cela,
+    /// débloquer rendait le personnage à la clé épinglée, donc à l'usurpateur,
+    /// et le vrai joueur restait contesté pour toujours.
+    /// </remarks>
     public void Unblock(GroupId id, GroupBan ban)
     {
         lock (_gate)
         {
-            if (_groups.TryGetValue(id, out var group) is false)
+            if (_groups.TryGetValue(id, out var group) is false || group.Blocked.Contains(ban) is false)
                 return;
 
-            _groups[id] = group with { Blocked = [.. group.Blocked.Where(known => known != ban)] };
+            var blocked = group.Blocked.Where(known => known != ban).ToList();
+            var members = group.Members;
+
+            if (ban is { Peer: { } peer, Fingerprint: { } print })
+            {
+                blocked.Add(new GroupBan(peer, null));
+
+                if (members.TryGetValue(print, out var member) && member.Id == peer)
+                {
+                    members = new Dictionary<PlayerFingerprint, GroupMember>(members)
+                    {
+                        [print] = member with { Id = null, PublicKey = null },
+                    };
+                }
+            }
+
+            _groups[id] = group with { Blocked = blocked, Members = members };
         }
 
         Changed?.Invoke();
@@ -416,23 +508,5 @@ public sealed class GroupBook(IClock clock) : IGroupGate, IGroupPolicies
         }
 
         Changed?.Invoke();
-    }
-
-    /// <summary>
-    /// Oublie le membre vu il y a le plus longtemps.
-    /// </summary>
-    /// <remarks>
-    /// Jamais un membre en pause : c'est un réglage que l'utilisateur a posé, et
-    /// le retrouver effacé en silence serait pire que de garder un inconnu.
-    /// </remarks>
-    private static void ForgetOldest(Dictionary<PlayerFingerprint, GroupMember> members, PlayerFingerprint spare)
-    {
-        var oldest = members.Values
-            .Where(candidate => candidate.Paused is false && candidate.Fingerprint != spare)
-            .OrderBy(candidate => candidate.LastSeenAt ?? DateTimeOffset.MinValue)
-            .FirstOrDefault();
-
-        if (oldest is not null)
-            members.Remove(oldest.Fingerprint);
     }
 }

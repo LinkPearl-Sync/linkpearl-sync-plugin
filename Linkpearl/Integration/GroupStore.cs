@@ -55,7 +55,7 @@ public sealed class GroupStore(string path)
     public void Save(GroupBook book)
     {
         lock (_writing)
-            WriteUnderLock(GroupBookCodec.Encode(book.All));
+            WriteUnderLock(GroupBookCodec.Encode(book.Stored));
     }
 
     private void WriteUnderLock(byte[] plain)

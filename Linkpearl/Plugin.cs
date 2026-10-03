@@ -260,7 +260,8 @@ public sealed class Plugin : IDalamudPlugin
             _groups, () => _pairing.Identity?.PublicKey, clock,
             refuses: (request, print) => _serviceBans.Screen(
                     print, (salt, parameters) => BanList.Derive(request.CharacterName, request.WorldId, salt, parameters))
-                .Verdict is not BanVerdict.Clear);
+                .Verdict is not BanVerdict.Clear,
+            ourFingerprint: () => _state.Self?.Fingerprint);
         _candidate = new AdmissionCandidate(clock);
         _presence.Attach(_admissionHost, _candidate);
         _groupActions = BuildGroupActions();
@@ -982,7 +983,7 @@ public sealed class Plugin : IDalamudPlugin
                             .Select(pair => pair.PinnedFingerprint)
                             .OfType<PlayerFingerprint>();
 
-                        _engine?.SetGroupPeers(_groupPlanner.Plan(self.Fingerprint, sightings, _groups.All, directly, _serviceBans));
+                        _engine?.SetGroupPeers(_groupPlanner.Plan(self.Fingerprint, sightings, _groups.All, directly, _serviceBans, _pairing.Id));
                     }
                 }
                 else
@@ -1415,6 +1416,7 @@ public sealed class Plugin : IDalamudPlugin
         Unblock = _groups.Unblock,
         SetDefaultReceive = _groups.SetDefaultReceive,
         OurIdentityKey = () => _pairing.Identity?.PublicKey,
+        IsExcluded = group => group.Excludes(_pairing.Id, _state.Self?.Fingerprint),
     };
 
     /// <summary>Les services actifs de la configuration : ceux du Public.</summary>
@@ -1553,7 +1555,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         if (_groups.Find(id) is { SigningKey: not null, Policy.Dissolved: false } group)
         {
-            Report($"Le groupe {group.Name} appartient à ce personnage. Le dissoudre avant de le retirer.");
+            Report($"Le groupe {Glyphs.Safe(group.Name)} appartient à ce personnage. Le dissoudre avant de le retirer.");
             return;
         }
 
@@ -1626,9 +1628,10 @@ public sealed class Plugin : IDalamudPlugin
         if (_candidate.TakeJoined(_clock.UtcNow) is not { } joined)
             return;
 
+        // Le nom vient de l'octroi, donc du réseau.
         Report(_groups.TryAdd(joined, out var refusal)
-            ? $"Groupe {joined.Name} rejoint."
-            : $"Impossible de rejoindre {joined.Name} : {refusal}.");
+            ? $"Groupe {Glyphs.Safe(joined.Name)} rejoint."
+            : $"Impossible de rejoindre {Glyphs.Safe(joined.Name)} : {refusal}.");
     }
 
     /// <summary>
@@ -1640,8 +1643,15 @@ public sealed class Plugin : IDalamudPlugin
     /// propriétaire n'est jamais retiré : c'est lui qui a dissous, et aucun
     /// bannissement ne peut le viser. Le nom du groupe va au chat du joueur,
     /// jamais au journal.
+    ///
+    /// Exclu, on garde le groupe et son secret, sans rien composer d'autre que
+    /// ceux qui peuvent nous réintégrer (voir GroupDialPlanner) : un
+    /// modérateur peut bannir tout le monde, et si chacun supprimait alors le
+    /// groupe, le propriétaire ne pourrait plus rattraper personne. Ce serait
+    /// une dissolution, que seul le propriétaire peut signer. Seule une
+    /// dissolution retire le groupe ; le joueur peut aussi le quitter.
     /// </remarks>
-    private void OnPolicyAdopted(GroupId id)
+    private void OnPolicyAdopted(GroupId id, GroupPolicy? previous)
     {
         try
         {
@@ -1649,13 +1659,18 @@ public sealed class Plugin : IDalamudPlugin
                 || GroupGovernance.RoleOf(group, _pairing.Identity?.PublicKey) is GroupRole.Owner)
                 return;
 
-            if (policy.IsBanned(_pairing.Id, _state.Self?.Fingerprint))
+            var wasExcluded = (group with { Policy = previous }).Excludes(_pairing.Id, _state.Self?.Fingerprint);
+
+            if (group.Excludes(_pairing.Id, _state.Self?.Fingerprint))
             {
-                if (_groups.Remove(id))
+                if (wasExcluded is false)
                     Report($"Exclusion du groupe {group.Name}.");
 
                 return;
             }
+
+            if (wasExcluded && policy.Dissolved is false)
+                Report($"Exclusion du groupe {Glyphs.Safe(group.Name)} levée.");
 
             if (policy.Dissolved && _groups.Remove(id))
                 Report($"Le groupe {group.Name} a été dissous.");
