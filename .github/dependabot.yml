@@ -1,0 +1,32 @@
+# Les actions sont épinglées par empreinte de commit et les paquets NuGet
+# figés par packages.lock.json : sans Dependabot, ni les unes ni les autres ne
+# bougeraient plus jamais, correctifs de sécurité compris. Il propose chaque
+# montée en pull request, qu'un humain relit avant de la fusionner : ce code
+# finit dans le processus du jeu de chaque joueur.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore(ci)
+
+  # Un répertoire par projet qui a son packages.lock.json : Dependabot met à
+  # jour le .csproj et le fichier verrou ensemble.
+  - package-ecosystem: nuget
+    directories:
+      - /Linkpearl
+      - /Linkpearl.Core.Tests
+      - /Linkpearl.Harness
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      # Penumbra.Api et Glamourer.Api suivent les plugins installés chez les
+      # joueurs, pas le calendrier de Dependabot : une montée se décide en
+      # lisant leurs notes, d'où leur exclusion du lot.
+      nuget:
+        patterns: ["*"]
+        exclude-patterns: ["Penumbra.Api", "Glamourer.Api"]
