@@ -9,7 +9,7 @@
 #
 # Côté Dalamud, une seule configuration à faire une fois :
 #   /xlsettings > Experimental > Dev Plugin Locations > ajouter
-#   C:\Users\yann\XIVDev\Linkpearl\LinkpearlSync.dll (la DLL elle-même : depuis le
+#   D:\XIVDev\Linkpearl\LinkpearlSync.dll (la DLL elle-même : depuis le
 #   renommage, un emplacement qui visait Linkpearl.dll ne trouve plus rien)
 
 set -euo pipefail
@@ -17,7 +17,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT="$REPO_ROOT/Linkpearl/Linkpearl.csproj"
 BUILD_DIR="$REPO_ROOT/Linkpearl/bin/Debug"
-DEST="${LINKPEARL_DEV_PLUGIN_DIR:-/mnt/c/Users/yann/XIVDev/Linkpearl}"
+DEST="${LINKPEARL_DEV_PLUGIN_DIR:-/mnt/d/XIVDev/Linkpearl}"
 
 # Le SDK Dalamud cherche ses assemblies dans ~/.xlcore sous Linux, alors que le
 # Dalamud à jour est celui de XIVLauncher côté Windows. On les aligne avant de
