@@ -335,7 +335,7 @@ public sealed class PeerConnector(
         }
 
         var viaOpen = open.Contains(match.Value.At);
-        log.Info($"{pair.DisplayName} : apparié sur {match.Value.At}{(viaOpen ? " (réseau ouvert)" : "")}.");
+        log.Info($"{pair.LogTag} : apparié sur {match.Value.At}{(viaOpen ? " (réseau ouvert)" : "")}.");
 
         if (TryOpenCandidates(pair.PairSecret, match.Value.Theirs, out var plain) is false)
             return new ConnectionAttempt(
@@ -356,7 +356,7 @@ public sealed class PeerConnector(
         // l'attend déjà au relais, et chacun attendrait l'autre pour rien.
         if (candidates.Count > 0 && ordered.Count > 0)
         {
-            log.Info($"{pair.DisplayName} : {ordered.Count} adresse(s) à essayer.");
+            log.Info($"{pair.LogTag} : {ordered.Count} adresse(s) à essayer.");
 
             var token = TokenFor(pair.PairSecret);
             links.Allow(token, pair.DisplayName);
@@ -366,11 +366,11 @@ public sealed class PeerConnector(
             if (link is not null)
                 return new ConnectionAttempt(link, false, null, Via: match.Value.At);
 
-            log.Info($"{pair.DisplayName} : perçage sans réponse, passage au relais.");
+            log.Info($"{pair.LogTag} : perçage sans réponse, passage au relais.");
         }
         else
         {
-            log.Info($"{pair.DisplayName} : relais seul, l'un des deux n'offre aucune adresse.");
+            log.Info($"{pair.LogTag} : relais seul, l'un des deux n'offre aucune adresse.");
         }
 
         var ticket = RelayTicketFor(pair.PairSecret, sealedCandidates, match.Value.Theirs);
@@ -384,7 +384,7 @@ public sealed class PeerConnector(
         var chosenPlace = eligible.FirstOrDefault(place => place.Fingerprint == decision.Service) ?? matchedPlace;
 
         if (chosenPlace.Fingerprint != matchedPlace.Fingerprint)
-            log.Info($"{pair.DisplayName} : relais par {ServiceConsensus.Canonical(chosenPlace.At)} ({decision.WorstMs} ms"
+            log.Info($"{pair.LogTag} : relais par {ServiceConsensus.Canonical(chosenPlace.At)} ({decision.WorstMs} ms"
                      + (decision.MatchedWorstMs is { } before ? $" contre {before} ms au service d'appariement)." : ")."));
 
         var (relayed, via) = await RelayWithFallbackAsync(

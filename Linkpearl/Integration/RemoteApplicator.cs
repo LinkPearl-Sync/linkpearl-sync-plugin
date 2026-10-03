@@ -321,7 +321,8 @@ public sealed class RemoteApplicator : IRemoteApplicator, IDisposable
         }
         catch (Exception e)
         {
-            _log.Warning(e, $"{what} en échec.");
+            _log.Warning($"{what} en échec ({e.GetType().Name}).");
+            _log.Debug(e, $"{what} en échec.");
         }
     }
 

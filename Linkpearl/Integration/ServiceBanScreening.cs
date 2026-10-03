@@ -49,7 +49,8 @@ public sealed class ServiceBanScreening(ServiceBanBook book, IPluginLog log) : I
             }
             catch (Exception e)
             {
-                log.Warning(e, "Vérification des listes de bannissement en échec.");
+                log.Warning($"Vérification des listes de bannissement en échec ({e.GetType().Name}).");
+                log.Debug(e, "Vérification des listes de bannissement en échec.");
             }
             finally
             {

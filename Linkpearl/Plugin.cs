@@ -622,7 +622,8 @@ public sealed class Plugin : IDalamudPlugin
         }
         catch (IOException e)
         {
-            Log.Warning(e, "Reprise du témoin de collections impossible.");
+            Log.Warning($"Reprise du témoin de collections impossible ({e.GetType().Name}).");
+            Log.Debug(e, "Reprise du témoin de collections impossible.");
         }
     }
 
@@ -659,7 +660,8 @@ public sealed class Plugin : IDalamudPlugin
         catch (Exception e)
         {
             // Une exception ici remonterait dans la boucle du jeu.
-            Log.Error(e, "Changement de personnage en échec.");
+            Log.Error($"Changement de personnage en échec ({e.GetType().Name}).");
+            Log.Debug(e, "Changement de personnage en échec.");
             Report("Impossible de charger l'identité de ce personnage. Consulter le journal.");
         }
     }
@@ -770,7 +772,8 @@ public sealed class Plugin : IDalamudPlugin
             }
             catch (Exception e)
             {
-                Log.Warning(e, "Arrêt du moteur en échec.");
+                Log.Warning($"Arrêt du moteur en échec ({e.GetType().Name}).");
+                Log.Debug(e, "Arrêt du moteur en échec.");
             }
         });
     }
@@ -995,7 +998,8 @@ public sealed class Plugin : IDalamudPlugin
             }
             catch (Exception e) when (ct.IsCancellationRequested is false)
             {
-                Log.Warning(e, "Rafraîchissement en échec.");
+                Log.Warning($"Rafraîchissement en échec ({e.GetType().Name}).");
+                Log.Debug(e, "Rafraîchissement en échec.");
             }
 
             await Task.Delay(TimeSpan.FromSeconds(15), ct).ConfigureAwait(false);
@@ -1349,7 +1353,8 @@ public sealed class Plugin : IDalamudPlugin
             }
             catch (Exception e) when (ct.IsCancellationRequested is false)
             {
-                Log.Warning(e, "Tic du moteur en échec.");
+                Log.Warning($"Tic du moteur en échec ({e.GetType().Name}).");
+                Log.Debug(e, "Tic du moteur en échec.");
             }
 
             await Task.Delay(TimeSpan.FromSeconds(1), ct).ConfigureAwait(false);
@@ -1758,7 +1763,8 @@ public sealed class Plugin : IDalamudPlugin
             }
             catch (Exception e)
             {
-                Log.Error(e, "Action Linkpearl en échec.");
+                Log.Error($"Action Linkpearl en échec ({e.GetType().Name}).");
+                Log.Debug(e, "Action Linkpearl en échec.");
                 Report("Action impossible. Réessayer. Si le problème persiste, consulter le journal.");
             }
         }, _shutdown.Token);

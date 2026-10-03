@@ -112,8 +112,14 @@ public sealed class ExtrasIpc : IDisposable
 
     private void ReportOnce(string name, Exception e)
     {
-        if (_reported.Add(name))
-            _log.Warning(e, $"{name} ne répond pas comme attendu, ignoré.");
+        // Le type seul par défaut : le message d'une exception d'IPC ou de
+        // disque porte volontiers un chemin local complet, le détail attend
+        // le niveau Debug.
+        if (_reported.Add(name) is false)
+            return;
+
+        _log.Warning($"{name} ne répond pas comme attendu, ignoré ({e.GetType().Name}).");
+        _log.Debug(e, $"{name} ne répond pas comme attendu, ignoré.");
     }
 
     private void RaiseChanged() => Changed?.Invoke();
