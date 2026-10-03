@@ -415,6 +415,25 @@ public sealed class RendezvousClient : IAsyncDisposable
         return frame is not null && frame[0] == RendezvousKind.RelayData ? frame[1..] : null;
     }
 
+    /// <summary>Taille minimale d'une demande de réflexion.</summary>
+    /// <remarks>
+    /// La réponse pèse de 8 à 20 octets selon la famille d'adresse. Une
+    /// demande d'un seul octet laissait donc quiconque usurpe une source
+    /// obtenir jusqu'à vingt fois ce qu'il envoie vers sa victime. Bourrée à
+    /// 32 octets, la demande pèse plus que toute réponse : le service ne
+    /// sert plus d'amplificateur. Un service qui ne regarde que le premier
+    /// octet, comme ceux d'avant, accepte la demande bourrée telle quelle.
+    /// </remarks>
+    public const int ReflectRequestLength = 32;
+
+    /// <summary>Une demande de réflexion : l'octet de type, puis des zéros.</summary>
+    public static byte[] ReflectRequest()
+    {
+        var request = new byte[ReflectRequestLength];
+        request[0] = RendezvousKind.Reflect;
+        return request;
+    }
+
     /// <summary>
     /// Demande au serveur l'adresse d'où il nous voit.
     /// </summary>
@@ -426,7 +445,7 @@ public sealed class RendezvousClient : IAsyncDisposable
     public static async Task<IPEndPoint?> ReflectAsync(
         Socket socket, EndPoint server, TimeSpan timeout, CancellationToken ct)
     {
-        await socket.SendToAsync(new byte[] { RendezvousKind.Reflect }, server, ct).ConfigureAwait(false);
+        await socket.SendToAsync(ReflectRequest(), server, ct).ConfigureAwait(false);
 
         var buffer = new byte[64];
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);

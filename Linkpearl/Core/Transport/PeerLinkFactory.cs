@@ -18,7 +18,8 @@ namespace Linkpearl.Core.Transport;
 /// percé le NAT. Ouvrir une socket par pair rendrait cette adresse inutile.
 ///
 /// Le jeton de connexion est dérivé du secret de paire : un inconnu ne peut pas
-/// ouvrir de session, même en connaissant l'adresse.
+/// ouvrir de session, même en connaissant l'adresse. Il voyage en clair, donc il
+/// n'ouvre la porte que le temps d'une tentative, et seulement vers elle.
 /// </remarks>
 public sealed class PeerLinkFactory : IDisposable
 {
@@ -27,11 +28,35 @@ public sealed class PeerLinkFactory : IDisposable
     private readonly ILogSink _log;
 
     private readonly ConcurrentDictionary<NetPeer, LiteNetPeerLink> _links = new();
-    private readonly ConcurrentDictionary<string, TaskCompletionSource<IPeerLink>> _pending =
-        new(StringComparer.Ordinal);
 
-    /// <summary>Les jetons acceptés, par pair. Tout le reste est refusé.</summary>
-    private readonly ConcurrentDictionary<string, string> _acceptedTokens = new(StringComparer.Ordinal);
+    /// <summary>
+    /// Tient ensemble les tentatives, les jetons et l'attribution des pairs.
+    /// </summary>
+    /// <remarks>
+    /// <c>Connect</c> part d'un fil du pool alors que <c>PeerConnectedEvent</c>
+    /// est levé sur celui du jeu : sans verrou commun, une connexion en boucle
+    /// locale pourrait être signalée avant que le pair rendu par
+    /// <c>Connect</c> ne soit rattaché à son jeton, et serait alors refusée.
+    /// </remarks>
+    private readonly Lock _gate = new();
+
+    /// <summary>Les tentatives sortantes en cours, par jeton.</summary>
+    private readonly Dictionary<string, TaskCompletionSource<IPeerLink>> _pending = new(StringComparer.Ordinal);
+
+    /// <summary>Les jetons attendus sans tentative sortante, chacun pour une seule connexion.</summary>
+    private readonly Dictionary<string, string> _passive = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Le jeton sous lequel chaque pair est entré ou sorti.
+    /// </summary>
+    /// <remarks>
+    /// C'est ce qui relie une connexion établie à la tentative qui l'attendait.
+    /// Sans lui, la première tentative en attente recevait n'importe quelle
+    /// connexion : un pair qui présentait son propre jeton captait celle
+    /// destinée à un autre, et pour un membre de groupe pas encore épinglé, sa
+    /// clé aurait été épinglée sous l'empreinte de l'autre.
+    /// </remarks>
+    private readonly Dictionary<NetPeer, string> _tokens = [];
 
     public PeerLinkFactory(int channels, ILogSink log)
     {
@@ -67,13 +92,36 @@ public sealed class PeerLinkFactory : IDisposable
 
     public int LocalPort => _manager.LocalPort;
 
-    /// <summary>Un pair a ouvert une session vers nous.</summary>
+    /// <summary>
+    /// Un pair a ouvert une session vers nous sous un jeton autorisé par
+    /// <see cref="Allow"/>, sans tentative sortante pour l'attendre.
+    /// </summary>
+    /// <remarks>
+    /// Sans abonné, une telle connexion est refermée aussitôt : un lien que
+    /// personne ne prend resterait ouvert sans session, ni fin.
+    /// </remarks>
     public event Action<string, IPeerLink>? Accepted;
 
-    /// <summary>Autorise un jeton, et donc le pair qui le présentera.</summary>
-    public void Allow(string token, string peerLabel) => _acceptedTokens[token] = peerLabel;
+    /// <summary>
+    /// Autorise un jeton pour une seule connexion entrante, remise par
+    /// <see cref="Accepted"/>.
+    /// </summary>
+    /// <remarks>
+    /// Une tentative sortante n'en a pas besoin : <see cref="ConnectAsync"/>
+    /// accepte d'elle-même son jeton tant qu'elle dure, et le retire en
+    /// partant, qu'il ait été autorisé ici ou non.
+    /// </remarks>
+    public void Allow(string token, string peerLabel)
+    {
+        lock (_gate)
+            _passive[token] = peerLabel;
+    }
 
-    public void Forget(string token) => _acceptedTokens.TryRemove(token, out _);
+    public void Forget(string token)
+    {
+        lock (_gate)
+            _passive.Remove(token);
+    }
 
     /// <summary>
     /// Tente de joindre un pair sur chacune de ses adresses candidates.
@@ -83,6 +131,10 @@ public sealed class PeerLinkFactory : IDisposable
     /// LiteNetLib n'envoie que deux paquets sans réessai, ce qui échoue dès que
     /// les deux côtés ne sont pas synchronisés à quelques dizaines de
     /// millisecondes près.
+    ///
+    /// Le lien rendu est celui qui a présenté ce jeton, qu'on l'ait composé ou
+    /// que le pair nous ait composés au même moment : le perçage simultané
+    /// aboutit tantôt par l'un, tantôt par l'autre.
     /// </remarks>
     public async Task<IPeerLink?> ConnectAsync(
         IReadOnlyList<IPEndPoint> candidates, string token, TimeSpan budget, CancellationToken ct)
@@ -91,33 +143,38 @@ public sealed class PeerLinkFactory : IDisposable
             return null;
 
         var completion = new TaskCompletionSource<IPeerLink>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _pending[token] = completion;
-        _acceptedTokens[token] = "sortant";
+
+        lock (_gate)
+        {
+            // Deux tentatives sous le même jeton se disputeraient la même
+            // connexion : la seconde renonce, l'appelant passera au relais.
+            if (_pending.TryAdd(token, completion) is false)
+            {
+                _log.Debug("Tentative déjà en cours sous ce jeton.");
+                return null;
+            }
+        }
+
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
         try
         {
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
             deadline.CancelAfter(budget);
 
-            var attempts = Task.Run(async () =>
+            // Pris avant la boucle : la source est libérée en sortant, et une
+            // rafale encore en route ne doit pas la relire.
+            var stop = deadline.Token;
+
+            _ = Task.Run(async () =>
             {
-                while (deadline.IsCancellationRequested is false)
+                while (stop.IsCancellationRequested is false)
                 {
                     foreach (var candidate in candidates)
-                    {
-                        try
-                        {
-                            _manager.Connect(candidate, token);
-                        }
-                        catch (Exception e)
-                        {
-                            _log.Debug($"Tentative vers {candidate} refusée : {e.Message}");
-                        }
-                    }
+                        Dial(candidate, token, completion);
 
-                    await Task.Delay(500, deadline.Token).ConfigureAwait(false);
+                    await Task.Delay(500, stop).ConfigureAwait(false);
                 }
-            }, deadline.Token);
+            }, stop);
 
             var finished = await Task.WhenAny(completion.Task, Task.Delay(budget, ct)).ConfigureAwait(false);
 
@@ -129,8 +186,70 @@ public sealed class PeerLinkFactory : IDisposable
         }
         finally
         {
-            _pending.TryRemove(token, out _);
+            // Les rafales s'arrêtent avant que le jeton ne soit libéré : une
+            // rafale tardive rattacherait sinon un pair à un jeton qui n'a plus
+            // de tentative.
+            await deadline.CancelAsync().ConfigureAwait(false);
+            Settle(token, completion);
         }
+    }
+
+    /// <summary>Compose vers un candidat, et rattache le pair rendu au jeton.</summary>
+    private void Dial(IPEndPoint candidate, string token, TaskCompletionSource<IPeerLink> completion)
+    {
+        lock (_gate)
+        {
+            // La tentative a pu se terminer entre deux rafales.
+            if (completion.Task.IsCompleted || _pending.GetValueOrDefault(token) != completion)
+                return;
+
+            try
+            {
+                // Null quand une demande entrante de cette adresse attend déjà :
+                // elle passera par OnConnectionRequest avec son propre jeton. Un
+                // pair déjà rattaché à un autre jeton garde le sien : c'est la
+                // connexion d'un autre pair, qu'une tentative ne s'approprie pas.
+                if (_manager.Connect(candidate, token) is { } peer)
+                    _tokens.TryAdd(peer, token);
+            }
+            catch (Exception e)
+            {
+                _log.Debug($"Tentative vers {candidate} refusée : {e.Message}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Retire le jeton d'une tentative terminée, quelle qu'en soit l'issue.
+    /// </summary>
+    /// <remarks>
+    /// Un jeton qui survit à sa tentative resterait une porte ouverte à qui
+    /// l'a lu passer en clair. Et les pairs composés sans succès, vers une
+    /// adresse locale ou périmée, continueraient de frapper.
+    /// </remarks>
+    private void Settle(string token, TaskCompletionSource<IPeerLink> completion)
+    {
+        List<NetPeer> abandoned = [];
+
+        lock (_gate)
+        {
+            if (_pending.GetValueOrDefault(token) == completion)
+                _pending.Remove(token);
+
+            _passive.Remove(token);
+
+            foreach (var (peer, owner) in _tokens)
+            {
+                if (owner == token && _links.ContainsKey(peer) is false)
+                    abandoned.Add(peer);
+            }
+
+            foreach (var peer in abandoned)
+                _tokens.Remove(peer);
+        }
+
+        foreach (var peer in abandoned)
+            peer.Disconnect();
     }
 
     /// <summary>À appeler depuis le thread du jeu, à chaque image.</summary>
@@ -156,7 +275,7 @@ public sealed class PeerLinkFactory : IDisposable
             deadline.CancelAfter(timeout);
 
             var writer = new NetDataWriter();
-            writer.Put(RendezvousKind.Reflect);
+            writer.Put(RendezvousClient.ReflectRequest());
 
             while (deadline.IsCancellationRequested is false && completion.Task.IsCompleted is false)
             {
@@ -205,36 +324,88 @@ public sealed class PeerLinkFactory : IDisposable
 
     private void OnConnectionRequest(ConnectionRequest request)
     {
-        var token = request.Data.GetString(128);
+        string token;
 
-        if (_acceptedTokens.ContainsKey(token) is false)
+        try
         {
-            // Un inconnu, ou un jeton périmé : on refuse sans rien révéler.
+            token = request.Data.GetString(128);
+        }
+        catch (Exception)
+        {
             request.Reject();
             return;
         }
 
-        request.Accept();
+        lock (_gate)
+        {
+            // Seul un jeton qu'une tentative en cours attend, ou autorisé pour
+            // une seule connexion, ouvre la porte. Un inconnu ou un jeton
+            // périmé est refusé sans rien révéler. Pendant un perçage
+            // simultané, la demande du pair arrive parfois avant notre propre
+            // tentative : refusée, elle revient à sa rafale suivante.
+            var expected = _pending.TryGetValue(token, out var attempt) && attempt.Task.IsCompleted is false;
+
+            if (expected is false && _passive.ContainsKey(token) is false)
+            {
+                request.Reject();
+                return;
+            }
+
+            if (request.Accept() is { } peer)
+                _tokens[peer] = token;
+        }
     }
 
     private void OnPeerConnected(NetPeer peer)
     {
-        var link = new LiteNetPeerLink(peer);
-        _links[peer] = link;
+        LiteNetPeerLink? link = null;
+        string? label = null;
 
-        // Le jeton n'est pas rendu par LiteNetLib côté sortant : on résout la
-        // promesse en attente s'il n'y en a qu'une, sinon on traite le lien
-        // comme entrant et la couche supérieure l'identifiera au handshake.
-        var pending = _pending.FirstOrDefault(p => p.Value.Task.IsCompleted is false);
+        lock (_gate)
+        {
+            if (_tokens.TryGetValue(peer, out var token))
+            {
+                link = new LiteNetPeerLink(peer);
+                _links[peer] = link;
 
-        if (pending.Value is not null && pending.Value.TrySetResult(link))
+                // Seule la tentative qui porte ce jeton reçoit ce lien. Une
+                // tentative déjà servie, par une autre adresse du même pair,
+                // n'en veut pas un second.
+                if (_pending.TryGetValue(token, out var attempt) && attempt.TrySetResult(link))
+                    return;
+
+                if (Accepted is not null && _passive.Remove(token, out var allowed))
+                    label = allowed;
+            }
+        }
+
+        if (link is not null && label is not null)
+        {
+            Accepted?.Invoke(label, link);
             return;
+        }
 
-        Accepted?.Invoke("entrant", link);
+        // Personne n'attend ce lien : un pair sans jeton connu, une connexion
+        // aboutie après la fin de sa tentative, ou un doublon. Le garder
+        // ouvert ne servirait qu'à tenir un lien sans session.
+        _log.Debug("Connexion sans tentative pour l'attendre, refermée.");
+        Drop(peer);
+    }
+
+    private void Drop(NetPeer peer)
+    {
+        lock (_gate)
+            _tokens.Remove(peer);
+
+        _links.TryRemove(peer, out _);
+        peer.Disconnect();
     }
 
     private void OnPeerDisconnected(NetPeer peer, DisconnectInfo info)
     {
+        lock (_gate)
+            _tokens.Remove(peer);
+
         if (_links.TryRemove(peer, out var link))
             link.Close(info.Reason.ToString());
     }

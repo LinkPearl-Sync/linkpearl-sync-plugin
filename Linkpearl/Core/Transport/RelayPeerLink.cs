@@ -1,6 +1,8 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Net;
+using Linkpearl.Core.Crypto;
 
 namespace Linkpearl.Core.Transport;
 
@@ -75,8 +77,23 @@ public sealed class RelayPeerLink : IPeerLink
     private readonly CancellationTokenSource _life = new();
     private readonly int[] _pending = new int[256];
 
-    /// <summary>Fragments reçus d'un message pas encore terminé, par canal.</summary>
-    private readonly Dictionary<byte, MemoryStream> _assembling = [];
+    /// <summary>
+    /// Fragments reçus du message en cours, pris dans le pool.
+    /// </summary>
+    /// <remarks>
+    /// Un seul message à la fois, tous canaux confondus : l'émetteur envoie
+    /// tous les fragments d'un message sous un même verrou, donc deux messages
+    /// ne s'entrelacent jamais sur le fil. Un réassemblage par canal laissait
+    /// un pair hostile en ouvrir 256 de 16 Mio chacun. Et des fragments de
+    /// 32 Kio restent hors du LOH, là où un <c>MemoryStream</c> doublait sa
+    /// capacité jusqu'à 32 Mio.
+    /// </remarks>
+    private readonly List<byte[]> _parts = [];
+
+    private int _assemblingChannel = NotAssembling;
+    private int _assembledLength;
+
+    private const int NotAssembling = -1;
 
     private Action<byte, byte[]>? _received;
     private int _started;
@@ -130,6 +147,9 @@ public sealed class RelayPeerLink : IPeerLink
 
         if (payload.Length > MaxMessageLength)
             throw new ArgumentException($"message de {payload.Length} octets, plafond {MaxMessageLength}", nameof(payload));
+
+        // Le pair refuserait le fragment et couperait le lien.
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(channel, SecureChannel.MaxChannels);
 
         Interlocked.Increment(ref _pending[channel]);
 
@@ -212,6 +232,9 @@ public sealed class RelayPeerLink : IPeerLink
             reason = $"relais en échec : {e.Message}";
         }
 
+        // Seule cette boucle touche aux fragments : les rendre ici, et non dans
+        // Close, évite de les libérer sous un réassemblage en cours.
+        ReleaseParts();
         Close(reason);
     }
 
@@ -259,29 +282,66 @@ public sealed class RelayPeerLink : IPeerLink
 
     private string? Assemble(bool last, byte channel, ReadOnlySpan<byte> body)
     {
+        // Le scellement ne connaît pas d'autre canal : au-delà, la trame ne
+        // pourrait de toute façon pas s'ouvrir.
+        if (channel >= SecureChannel.MaxChannels)
+            return $"canal hors bornes ({channel})";
+
+        // L'émetteur ne coupe qu'en fragments pleins : seul le dernier est plus
+        // court. Exiger cette forme borne le nombre de fragments d'un message,
+        // là où une pluie de fragments d'un octet ferait enfler la liste.
+        if (last ? body.Length > FragmentLength : body.Length != FragmentLength)
+            return $"fragment de {body.Length} octets";
+
+        if (_assemblingChannel != NotAssembling && _assemblingChannel != channel)
+            return "fragments de deux messages entrelacés";
+
         // Un message d'un seul fragment, le cas de chaque bloc : aucune copie
         // intermédiaire.
-        if (last && _assembling.ContainsKey(channel) is false)
+        if (last && _assemblingChannel == NotAssembling)
         {
             _received?.Invoke(channel, body.ToArray());
             return null;
         }
 
-        if (_assembling.TryGetValue(channel, out var buffer) is false)
-            _assembling[channel] = buffer = new MemoryStream();
-
-        if (buffer.Length + body.Length > MaxMessageLength)
+        if (_assembledLength + body.Length > MaxMessageLength)
             return $"message de plus de {MaxMessageLength} octets";
 
-        buffer.Write(body);
+        var part = ArrayPool<byte>.Shared.Rent(FragmentLength);
+        body.CopyTo(part);
+        _parts.Add(part);
+        _assembledLength += body.Length;
+        _assemblingChannel = channel;
 
-        if (last)
+        if (last is false)
+            return null;
+
+        // Seul le message entier, de taille connue, est alloué d'un bloc : le
+        // contrat de IPeerLink rend un tableau.
+        var message = new byte[_assembledLength];
+        var offset = 0;
+
+        foreach (var piece in _parts)
         {
-            _assembling.Remove(channel);
-            _received?.Invoke(channel, buffer.ToArray());
+            var length = Math.Min(FragmentLength, message.Length - offset);
+            piece.AsSpan(0, length).CopyTo(message.AsSpan(offset));
+            offset += length;
         }
 
+        ReleaseParts();
+        _received?.Invoke(channel, message);
         return null;
+    }
+
+    /// <summary>Rend au pool les fragments du message en cours, et l'oublie.</summary>
+    private void ReleaseParts()
+    {
+        foreach (var piece in _parts)
+            ArrayPool<byte>.Shared.Return(piece);
+
+        _parts.Clear();
+        _assembledLength = 0;
+        _assemblingChannel = NotAssembling;
     }
 
     /// <summary>

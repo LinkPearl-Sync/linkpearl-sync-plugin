@@ -82,15 +82,12 @@ public static class IdentityBackupService
     {
         foreach (var entry in entries)
         {
-            try
-            {
-                using var key = ECDsa.Create();
-                key.ImportPkcs8PrivateKey(entry.Identity, out _);
-            }
-            catch (CryptographicException)
-            {
+            // Sur P-256 et nulle autre : une clé d'une autre courbe passerait
+            // l'import, puis empêcherait le personnage de se charger.
+            if (IdentityKeyPair.TryImport(entry.Identity, out var key, out _) is false)
                 return (false, "sauvegarde impossible : identité invalide.");
-            }
+
+            key.Dispose();
 
             if (PairBookStore.IsValid(entry.Pairs) is false)
                 return (false, "sauvegarde impossible : carnet de pairs illisible.");

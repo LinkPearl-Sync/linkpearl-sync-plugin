@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Linkpearl.Core.Abstractions;
 using Linkpearl.Core.Crypto;
 using Linkpearl.Core.Identity;
@@ -52,6 +53,64 @@ public class IdentityKeyPairTests
         using var second = IdentityKeyPair.LoadOrCreate(store);
 
         Assert.NotEqual(premier.PublicKey, second.PublicKey);
+    }
+
+    [Theory]
+    [InlineData("nistP384")]
+    [InlineData("nistP521")]
+    [InlineData("brainpoolP256r1")]
+    public void Une_cle_d_une_autre_courbe_est_refusee(string curveName)
+    {
+        // Elle passait l'import, puis faisait lever une exception non attrapée
+        // à l'export du point public : le personnage ne se chargeait plus.
+        ECCurve curve;
+
+        try
+        {
+            curve = ECCurve.CreateFromFriendlyName(curveName);
+            using var probe = ECDsa.Create(curve);
+        }
+        catch (Exception e) when (e is PlatformNotSupportedException or CryptographicException)
+        {
+            // Courbe absente de cette plateforme : rien à éprouver.
+            return;
+        }
+
+        using var foreign = ECDsa.Create(curve);
+        var blob = foreign.ExportPkcs8PrivateKey();
+
+        Assert.False(IdentityKeyPair.TryImport(blob, out var key, out var why));
+        Assert.Null(key);
+        Assert.Contains("P-256", why);
+
+        // Au chargement, la même clé ne bloque plus rien : une identité neuve
+        // la remplace, comme pour une identité illisible.
+        var store = new MemoryStore();
+        store.Save(blob);
+
+        using var identity = IdentityKeyPair.LoadOrCreate(store);
+
+        Assert.Equal(CryptoPrimitives.PublicPointLength, identity.PublicKey.Length);
+        Assert.NotEqual(blob, store.Load());
+    }
+
+    [Fact]
+    public void Une_cle_p256_s_importe()
+    {
+        using var original = CryptoPrimitives.GenerateIdentity();
+
+        Assert.True(IdentityKeyPair.TryImport(original.ExportPkcs8PrivateKey(), out var key, out var why), why);
+
+        using (key)
+            Assert.Equal(CryptoPrimitives.ExportPublicPoint(original), CryptoPrimitives.ExportPublicPoint(key));
+    }
+
+    [Fact]
+    public void Une_cle_illisible_est_refusee_sans_exception()
+    {
+        Assert.False(IdentityKeyPair.TryImport([1, 2, 3], out var key, out var why));
+        Assert.Null(key);
+        Assert.NotNull(why);
     }
 
     [Fact]

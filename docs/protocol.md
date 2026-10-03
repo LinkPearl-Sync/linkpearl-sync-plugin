@@ -794,6 +794,9 @@ l'extension de mesures (voir « Choix du relais »).
 une connexion UDP (LiteNetLib) vers toutes les adresses de l'autre, pendant dix
 secondes. La décision ne dépend que des deux blocs, que les deux côtés voient à
 l'identique : ils tentent le perçage ensemble, ou passent au relais ensemble.
+La demande de connexion porte un jeton dérivé du secret de paire, en clair. Il
+n'est accepté que pendant la tentative qui l'attend, et la connexion qui le
+présente ne sert que cette tentative ; toute autre est refermée.
 
 **Relais.** Sinon, ou si le perçage échoue, chaque côté ouvre le relais sur le
 service qui a apparié, ou le relais choisi (voir « Choix du relais »), sous un jeton que les deux calculent sans échange :
@@ -964,6 +967,11 @@ trames, pas le mécanisme anti-rejeu.
 - Chaque trame du handshake est attendue quinze secondes au plus. Tout échec,
   refus ou délai ferme le lien ; la connexion est retentée plus tard, avec un
   délai croissant.
+- Avant l'établissement, une trame du canal 0 est une trame du handshake tant
+  qu'il en attend une, et doit avoir sa taille fixe ; sinon le lien tombe. Tout
+  le reste est une trame scellée que le pair a envoyée en finissant avant nous :
+  elle est gardée, 64 trames et 1 Mio au plus, et ouverte à l'établissement.
+  Au-delà, ou si l'une ne s'ouvre pas, le lien tombe.
 
 ## Canal de données
 
@@ -989,7 +997,10 @@ donnée associée = type || canal || compteur
 - Le canal **exige un transport fiable et ordonné par canal** : une trame perdue
   ou déclassée ferait refuser la suivante. C'est ce que fournissent le mode
   `ReliableOrdered` de LiteNetLib et le relais TCP ; la perte de paquets est
-  réparée sous cette couche.
+  réparée sous cette couche. L'émetteur scelle et remet au transport sous un
+  même verrou par canal, pour que les trames partent dans l'ordre de leurs
+  compteurs. Un pair honnête ne produit donc jamais de trame refusée, et le
+  récepteur ferme le lien à la première.
 - **Pas de renouvellement de clé en cours de session.** À l'épuisement d'un
   compteur (2⁵⁶ messages), l'émission lève et la session doit être renégociée.
   Une reconnexion refait un handshake complet, avec des clés neuves ; les
@@ -1009,9 +1020,11 @@ sorte    : 0x00 fragment suivi d'autres, 0x01 dernier fragment,
 ```
 
 Un message du canal de données est découpé en fragments de 32 Kio au plus, tous
-émis sans entrelacement avec un autre message ; le récepteur les recolle par
-canal, et ferme le lien sur tout message de plus de 16 Mio ou toute sorte
-inconnue. Le contenu est une trame du canal de données, déjà scellée : le
+émis sans entrelacement avec un autre message ; tout fragment autre que le
+dernier fait exactement 32 Kio. Le récepteur ne recolle qu'un message à la
+fois, et ferme le lien sur tout message de plus de 16 Mio, toute sorte
+inconnue, tout canal au-delà de 63, tout fragment intermédiaire incomplet, et
+tout fragment d'un autre canal pendant qu'un message est en cours. Le contenu est une trame du canal de données, déjà scellée : le
 service transporte sans pouvoir lire.
 
 ## Secrets locaux
@@ -1072,7 +1085,9 @@ Ce qu'un tiers ou un rendez-vous peut faire consommer, et ce qui l'arrête.
 | Connexions simultanées par adresse (un /64 en IPv6) | 32 | `RendezvousLimits` |
 | Attente d'un partenaire au relais | 30 s côté service, 20 s côté client | `RendezvousLimits`, `PeerConnector` |
 | Trame du handshake attendue | 15 s | `PeerSession` |
-| Message reconstitué sur le relais | 16 Mio | `RelayPeerLink` |
+| Trames scellées reçues avant la fin du handshake | 64 trames, 1 Mio | `PeerSession` |
+| Message reconstitué sur le relais | 16 Mio, un seul à la fois | `RelayPeerLink` |
+| Demande de réflexion UDP | 32 octets au moins, plus que toute réponse | `RendezvousClient` |
 | Nouvelle tentative après échec | 5 s, doublée jusqu'à 5 min | `SyncEngineSettings` |
 | Politique de groupe | 16 Kio, 4 services, 16 modérateurs, 256 bannis | `GroupPolicyCodec` |
 | Politiques en attente de traitement, par session | 4 | `SyncEngine` |
