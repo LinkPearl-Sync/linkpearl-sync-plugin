@@ -275,7 +275,7 @@ public sealed class PeerLinkFactory : IDisposable
             deadline.CancelAfter(timeout);
 
             var writer = new NetDataWriter();
-            writer.Put(RendezvousKind.Reflect);
+            writer.Put(RendezvousClient.ReflectRequest());
 
             while (deadline.IsCancellationRequested is false && completion.Task.IsCompleted is false)
             {
