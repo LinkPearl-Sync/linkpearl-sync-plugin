@@ -4,9 +4,9 @@
     "net10.0": {
       "LiteNetLib": {
         "type": "Direct",
-        "requested": "[2.1.4, )",
-        "resolved": "2.1.4",
-        "contentHash": "KWlxvMw3Urpqj9joD96LRiK+LC62pQNs/zkXRJc+rHnxgkGp+vV703xzDrxRmv+V1YhCFfIGzs5nrVWtREIlyA=="
+        "requested": "[2.1.5, )",
+        "resolved": "2.1.5",
+        "contentHash": "inIiisoxrbxLgTPeKDzkfdEVuQuITo/cCdZYrNs0iUNTlg1AnnTi2orYqHL5Dqz0yo5qeOX5zvywh0RIUi675g=="
       }
     }
   }
