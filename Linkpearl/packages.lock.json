@@ -22,9 +22,9 @@
       },
       "LiteNetLib": {
         "type": "Direct",
-        "requested": "[2.1.4, )",
-        "resolved": "2.1.4",
-        "contentHash": "KWlxvMw3Urpqj9joD96LRiK+LC62pQNs/zkXRJc+rHnxgkGp+vV703xzDrxRmv+V1YhCFfIGzs5nrVWtREIlyA=="
+        "requested": "[2.1.5, )",
+        "resolved": "2.1.5",
+        "contentHash": "inIiisoxrbxLgTPeKDzkfdEVuQuITo/cCdZYrNs0iUNTlg1AnnTi2orYqHL5Dqz0yo5qeOX5zvywh0RIUi675g=="
       },
       "Penumbra.Api": {
         "type": "Direct",
@@ -38,9 +38,9 @@
       },
       "System.Security.Cryptography.ProtectedData": {
         "type": "Direct",
-        "requested": "[10.0.12, )",
-        "resolved": "10.0.12",
-        "contentHash": "wO0W8VDMeRJZakRySOmemAnrBZMwEFRlbfBtATxUiLf2I3IhSRnCp1Vt157NWptdE4IJ7eftd5n8q9LtaKHFTQ=="
+        "requested": "[10.0.14, )",
+        "resolved": "10.0.14",
+        "contentHash": "UuaBUHgmtc9h6CMxaQqFDDJxkS5JVy7XEB+DbtCvD68GFcVM9/AccuNwFpARx8nwCnvjaxzoOBjG3gPz32P1Eg=="
       },
       "Microsoft.Extensions.DependencyInjection": {
         "type": "Transitive",
