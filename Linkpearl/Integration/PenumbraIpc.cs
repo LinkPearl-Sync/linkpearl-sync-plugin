@@ -28,6 +28,7 @@ public sealed class PenumbraIpc : IDisposable
     private readonly DeleteTemporaryCollection _deleteCollection;
     private readonly RedrawObject _redraw;
     private readonly ResolvePlayerPaths _resolvePlayer;
+    private readonly GetModDirectory _modDirectory;
     private readonly IDisposable _redrawn;
     private readonly IDisposable _settings;
     private readonly IDisposable _resolved;
@@ -44,6 +45,7 @@ public sealed class PenumbraIpc : IDisposable
         _deleteCollection  = new DeleteTemporaryCollection(pi);
         _redraw            = new RedrawObject(pi);
         _resolvePlayer     = new ResolvePlayerPaths(pi);
+        _modDirectory      = new GetModDirectory(pi);
 
         // Le redessin est le signal qui compte : tout changement de mod
         // affectant le personnage en produit un. S'abonner aux changements de
@@ -116,6 +118,23 @@ public sealed class PenumbraIpc : IDisposable
     /// <remarks>Un chemin que Penumbra ne touche pas revient tel quel.</remarks>
     public string[] ResolvePlayer(string[] gamePaths)
         => gamePaths.Length == 0 ? [] : _resolvePlayer.Invoke(gamePaths, []).Item1;
+
+    /// <summary>Le dossier racine des mods de Penumbra, ou une chaîne vide s'il ne répond pas.</summary>
+    /// <remarks>
+    /// Vide, aucun fichier n'est annoncé : mieux vaut une apparence
+    /// incomplète qu'un fichier du disque servi sans savoir d'où il vient.
+    /// </remarks>
+    public string ModDirectory()
+    {
+        try
+        {
+            return _modDirectory.Invoke() ?? "";
+        }
+        catch (Exception)
+        {
+            return "";
+        }
+    }
 
     public string MetaManipulations()
         => _meta.Invoke();

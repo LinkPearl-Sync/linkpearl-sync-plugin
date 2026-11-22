@@ -22,6 +22,18 @@ pour tout le monde ou pour un pair.
   le donner au moteur du jeu. Le risque résiduel (animation bien formée mais
   faite pour un autre squelette) est couvert par les interrupteurs et par le
   pairage explicite.
+  *Novembre 2026, après audit :* le pairage explicite ne couvre pas les membres
+  d'un groupe privé, et un échange ne porte aucun fichier que l'émetteur
+  vérifierait. `FileSwapPolicy` refuse donc tout échange d'animation, de
+  squelette, de physique ou de points d'attache entre deux familles de
+  squelette (`chara/human/` vers `chara/monster/`, par exemple). Et le
+  receveur juge désormais lui aussi chaque `.pap` reçu contre le squelette de
+  la cible, avant de le poser (`ReceivedAnimationScreen`, `RemoteApplicator`),
+  sauf si l'apparence porte son propre squelette. **À vérifier en jeu avant
+  publication** : qu'une animation ordinaire n'est pas écartée, qu'une
+  animation faite pour un squelette personnalisé passe, et ce que devient la
+  première application quand Glamourer change la race du pair (le squelette
+  lu avant le redessin n'est pas encore le bon).
 - **Catégories** : Animations (`.pap`, `.tmb`), VFX (`.avfx`, `.atex`), Sons
   (`.scd`). `.shpk` reste refusé.
 - **Périmètre** : le personnage du joueur. Monture, familier et compagnon

@@ -17,9 +17,11 @@ namespace Linkpearl.Integration;
 /// <remarks>
 /// Une animation liée à un os au-delà du squelette qui la joue fait écrire le
 /// moteur du jeu hors de ses tableaux : c'est le plantage que les clients
-/// comparables se sont vus infliger par des animations de pairs. On ne le
-/// vérifie que chez l'émetteur, et c'est sans risque : son propre jeu charge
-/// déjà ces fichiers. Le receveur, lui, ne fait qu'un contrôle de forme.
+/// comparables se sont vus infliger par des animations de pairs. L'émetteur
+/// vérifie ses propres fichiers, sans risque puisque son jeu les charge déjà.
+/// Le receveur vérifie aussi ceux qu'il reçoit, avant de les poser
+/// (<c>RemoteApplicator</c>, <c>ReceivedAnimationScreen</c>) : un émetteur
+/// modifié se passe du premier contrôle.
 ///
 /// La lecture Havok passe par le chargeur du jeu, qui alloue dans la mémoire
 /// Havok du fil courant : elle ne s'appelle que depuis le thread du framework.

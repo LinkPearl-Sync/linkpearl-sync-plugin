@@ -107,6 +107,11 @@ public sealed class LocalAppearance : ILocalAppearance, IDisposable
         _current = null;
         Description = fingerprint is null ? "hors du jeu" : "apparence en préparation";
 
+        // Une construction lancée pour le précédent, encore en vol, publiait
+        // sinon son apparence sous l'empreinte du suivant : ses pairs voyaient
+        // l'autre personnage, et le lien entre les deux.
+        Interlocked.Increment(ref _generation);
+
         if (fingerprint is not null)
             Rebuild();
     }
@@ -201,7 +206,7 @@ public sealed class LocalAppearance : ILocalAppearance, IDisposable
             return;
         }
 
-        var (resources, meta, glamourer, rawExtras, transientPaths, transientResolved) = snapshot.Value;
+        var (resources, meta, glamourer, rawExtras, transientPaths, transientResolved, modDirectory) = snapshot.Value;
 
         if (resources is null)
         {
@@ -211,8 +216,18 @@ public sealed class LocalAppearance : ILocalAppearance, IDisposable
 
         resources = WithTransients(resources, transientPaths, transientResolved);
 
+        // Seuls les fichiers du dossier de mods s'annoncent : un mod qui
+        // redirigerait un chemin vers un autre fichier du disque ne le fait
+        // pas parvenir à nos pairs. Un plugin qui pose ses propres mods
+        // temporaires ailleurs y perd ces fichiers-là, et c'est le prix.
         var classified = ResourcePathClassifier.Classify(
-            resources.Select(kv => (kv.Key, (IReadOnlyCollection<string>)kv.Value)), Quotas.Default);
+            resources.Select(kv => (kv.Key, (IReadOnlyCollection<string>)kv.Value)), Quotas.Default,
+            modDirectory.Length > 0 ? [modDirectory] : []);
+
+        var outside = classified.Skipped.Count(s => s.Reason == ResourcePathClassifier.OutsideModDirectory);
+
+        if (outside > 0)
+            _log.Warning($"{outside} élément(s) du jeu redirigé(s) hors du dossier de mods de Penumbra, non synchronisé(s)");
 
         // Hachage et copies hors du thread de jeu : plusieurs centaines de Mo
         // passent ici, et une seule image bloquée se voit.
@@ -334,7 +349,7 @@ public sealed class LocalAppearance : ILocalAppearance, IDisposable
     /// un mod désactivé depuis ne doit plus rien faire partir.
     /// </remarks>
     private async Task<(IReadOnlyDictionary<string, HashSet<string>>? Resources, string Meta, string? Glamourer,
-            CharacterExtras Extras, string[] TransientPaths, string[] TransientResolved)?>
+            CharacterExtras Extras, string[] TransientPaths, string[] TransientResolved, string ModDirectory)?>
         ReadWhenDrawnAsync(CancellationToken ct)
     {
         for (var attempt = 0; attempt < 40; attempt++)
@@ -347,13 +362,14 @@ public sealed class LocalAppearance : ILocalAppearance, IDisposable
                 var job = local is ICharacter character ? character.ClassJob.RowId : 0;
                 var transients = _transients.Collect(job);
 
-                return ((IReadOnlyDictionary<string, HashSet<string>>?, string, string?, CharacterExtras, string[], string[])?)(
+                return ((IReadOnlyDictionary<string, HashSet<string>>?, string, string?, CharacterExtras, string[], string[], string)?)(
                     _penumbra.ResourcePathsOf(PlayerIndex),
                     _penumbra.MetaManipulations(),
                     _glamourer.StateOf(PlayerIndex),
                     _extras.ReadLocal(local),
                     transients,
-                    _penumbra.ResolvePlayer(transients));
+                    _penumbra.ResolvePlayer(transients),
+                    _penumbra.ModDirectory());
             }).ConfigureAwait(false);
 
             if (snapshot is not null)
