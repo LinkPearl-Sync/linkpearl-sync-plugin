@@ -169,6 +169,22 @@ public class ManifestCodecTests
         Assert.NotNull(why);
     }
 
+    [Theory]
+    [InlineData("""{"v":"2","r":[],"m":""}""")]
+    [InlineData("""{"v":2,"r":[{"h":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","s":"10","p":["chara/equipment/e0001/model/c0101e0001_top.mdl"]}],"m":""}""")]
+    public void Un_nombre_ecrit_en_texte_est_refuse_sans_lever(string json)
+    {
+        // Les lecteurs numériques de System.Text.Json lèvent sur une chaîne au
+        // lieu de rendre faux : l'exception remontait jusqu'à la pompe de la
+        // session, qui cessait de lire.
+        using var sortie = new MemoryStream();
+        using (var brotli = new System.IO.Compression.BrotliStream(sortie, System.IO.Compression.CompressionLevel.Fastest, leaveOpen: true))
+            brotli.Write(System.Text.Encoding.UTF8.GetBytes(json));
+
+        Assert.False(ManifestCodec.TryDecompress(sortie.ToArray(), Quotas.Default, out _, out var why));
+        Assert.NotNull(why);
+    }
+
     [Fact]
     public void Une_bombe_de_decompression_est_arretee_au_plafond()
     {

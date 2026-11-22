@@ -87,7 +87,7 @@ service, en clair. Il en découle :
 |---|---|---|
 | Observateur du réseau | en passif, voir les adresses IP, les tailles, les horaires, et **tout ce qui passe par le rendez-vous** : la liaison avec lui est en TCP nu, sans TLS, donc demandes de pairage, noms, mondes et clés publiques s'y lisent comme le service les lit | lire une session, usurper une identité |
 | Attaquant actif sur le réseau, entre un joueur et son service | **tout ce que peut un rendez-vous malveillant**, ci-dessous : sans TLS, rien ne distingue ses trames de celles du service, il peut donc s'intercaler dans un pairage qui passe par lui | lire une session, agir sur une paire déjà épinglée |
-| Client quelconque qui connaît `nom@monde` d'un joueur, **sur un service à jour** | réclamer la boîte personnelle de ce joueur **avant lui** (en ligne avant lui, ou pour une fenêtre à venir, dont l'adresse se calcule d'avance) : il lit alors ses demandes de pairage et peut y répondre. Le titulaire en est averti (chat et interface), et une seconde réponse à la même demande fait annuler le pairage | ouvrir une boîte déjà réclamée par son titulaire, ni la lire en même temps que lui |
+| Client quelconque qui connaît `nom@monde` d'un joueur, **sur un service à jour** | réclamer la boîte personnelle de ce joueur **avant lui** (en ligne avant lui, ou pour une fenêtre à venir, dont l'adresse se calcule d'avance) : il lit alors ses demandes de pairage et peut y répondre. Le titulaire en est averti (chat et interface), et une seconde réponse à la même demande, sous une autre clé **ou sous la même clé avec un autre éphémère**, fait annuler le pairage. **Sur un service que le demandeur utilise et où le titulaire n'est pas connecté**, la réclamation réussit sans que le titulaire en sache rien, puisqu'il ne tient rien là : le demandeur dépose sur tous ses services, et l'intrus y lit la demande en même temps que le titulaire la reçoit sur les siens. Il peut y répondre, mais l'accusé de réception du titulaire, parti de ses propres services, contredit sa réponse et fait annuler le pairage | ouvrir une boîte déjà réclamée par son titulaire, ni la lire en même temps que lui **sur un service où le titulaire est connecté** ; garder un pairage obtenu en répondant à la place d'un titulaire qui a reçu la demande, qu'il accepte ou non |
 | Le même, **sur un service d'avant la réclamation exclusive** | ouvrir la boîte en même temps que son titulaire, lire ses demandes et répondre à sa place ; si la vraie réponse arrive aussi dans les dix minutes, le pairage est annulé | conclure un pairage au nom d'un joueur qui n'est pas visible du demandeur |
 | Rendez-vous honnête mais curieux, ayant vu passer le pairage | savoir quels personnages se sont pairés | calculer le secret de paire, qui vient d'un accord éphémère ; lire une session |
 | Rendez-vous malveillant, **au moment du pairage** | substituer sa propre clé des deux côtés et s'intercaler dans toutes les sessions suivantes de cette paire ; ignorer la réclamation exclusive et livrer les demandes à qui il veut | agir sur une paire formée ailleurs |
@@ -111,8 +111,18 @@ Depuis, trois garde-fous, dont aucun ne retire au service son pouvoir :
 - **Une acceptation ne conclut que si l'expéditeur annoncé, nom et monde, est
   visible** du demandeur au moment où elle est traitée.
 - **L'aléa d'une demande reste surveillé dix minutes** après la première
-  acceptation : une seconde, sous une autre clé, fait retirer le pair ajouté
-  par la première, et le demandeur est invité à redemander en face à face. Pour un membre de groupe, ce premier contact n'est pas le
+  acceptation : une seconde, sous une autre clé ou sous la même avec un autre
+  éphémère, fait retirer le pair ajouté par la première, et le demandeur est
+  invité à redemander en face à face.
+- **La cible accuse réception d'elle-même**, sans attendre le clic, dès que la
+  demande entre dans sa boîte de réception : un dépôt de type 0x30 qui ne porte
+  que l'aléa et l'éphémère qu'elle gardera pour accepter, ni nom ni clé
+  d'identité. Le demandeur annule toute acceptation qui ne porte pas cet
+  éphémère, qu'elle soit venue avant ou après l'accusé. Un tiers qui lit la
+  demande sur un service où la cible n'écoute pas, et répond le premier, est
+  ainsi démasqué même si la cible n'accepte jamais. Un client d'avant ignore
+  ce type de dépôt ; sans accusé, le demandeur s'en tient aux garde-fous
+  ci-dessus. Pour un membre de groupe, ce premier contact n'est pas le
 pairage mais le premier handshake avec lui, et il reste gagnable par qui arrive
 avant le vrai : voir [Groupes (noyau)](#groupes-noyau). Pour un cercle qui héberge son propre service,
 l'opérateur est l'un d'eux, et c'est assumé dans `pairage.md`. Pour le service
@@ -192,9 +202,30 @@ adresse   = SHA-256("linkpearl:mbox:v1" || empreinte || fenetre(8))[tronquée]
 présence de ses groupes, toutes dérivées de son empreinte ; le service répond
 `MailboxClaimed` (0x1E), un bit par adresse, levé si la boîte est désormais à
 cette seule connexion, baissé si une autre la tient déjà. Un `MailboxOpen`
-d'une autre connexion sur une boîte réclamée est ignoré. Les boîtes
-d'admission d'un groupe, que tiennent ensemble tous ses modérateurs, restent
-ouvertes par `MailboxOpen`.
+d'une autre connexion sur une boîte réclamée est ignoré.
+
+**Les boîtes d'admission sont partagées, dans un registre à part.** Tous les
+membres qui admettent les tiennent ensemble, sans exclusivité. Sur le seul
+registre ordinaire, quiconque connaissait le code les réclamait d'avance pour
+les fenêtres à venir, et recevait seul chaque candidature, les modérateurs
+écartés sans le savoir. Depuis :
+
+- les membres qui admettent envoient `SharedMailboxOpen` (0x1F), en plus du
+  `MailboxOpen` d'avant gardé pour les candidats d'avant ; le service répond
+  `MailboxClaimed`, un bit par adresse, levé si la connexion tient la boîte ;
+- un candidat dépose par `SharedMailboxDeposit` (0x20), qui ne va qu'au
+  registre partagé ; le service répond `MailboxClaimed` à un bit, levé si un
+  détenteur au moins l'a reçu, et le candidat ne dépose à l'ancienne que si
+  personne n'y écoute ;
+- `MailboxClaim` ne touche jamais le registre partagé, et un dépôt ordinaire
+  n'y va jamais : ouvrir en partage la boîte personnelle d'un autre n'y fait
+  rien lire ;
+- une boîte partagée a au plus 64 détenteurs, et au plus deux par IPv4 ou par
+  /48 : sans exclusivité, en écarter les modérateurs demanderait d'en prendre
+  toutes les places, donc des dizaines de réseaux distincts.
+
+Un porteur du code peut toujours tenir la boîte et répondre le premier : c'est
+la course déjà décrite en tête, et elle reste une course.
 
 - Un bit baissé sur la boîte personnelle est redemandé chaque minute. Après
   deux échecs d'affilée (le service peut tenir encore, le temps de s'en
@@ -815,6 +846,7 @@ service ordinaire répond par une erreur.
 ```
 NetworkStatusQuery  0x19 | page (2, BE)
 NetworkStatusPage   0x1A | page (2, BE) | pages (2, BE) | tranche du JSON (≤ 32 Kio)
+                         (le JSON finit par "signature", celle de l'autorité sur le document sans elle)
 ```
 
 **Placement** d'une paire, par hachage de rendez-vous :
@@ -1178,16 +1210,21 @@ Ce qu'un tiers ou un rendez-vous peut faire consommer, et ce qui l'arrête.
 | Trames par adresse et par minute (service public) | 60 | `RendezvousLimits` |
 | Connexions simultanées par adresse (un /64 en IPv6) | 32 | `RendezvousLimits` |
 | Connexions simultanées par /48 en IPv6 | 128 | `RendezvousLimits` |
-| Connexions simultanées au total | 32 768 | `RendezvousLimits` |
+| Connexions simultanées au total | 32 768, et aucune nouvelle au-delà de 80 % du tas géré | `RendezvousLimits` |
 | Session qui ne tient ni boîte, ni attente, ni relais | fermée après 60 s | `RendezvousLimits` |
+| Corps d'une trame dont l'en-tête est arrivé | 30 s, puis la session est fermée | `RendezvousLimits` |
+| Sources retenues par le limiteur de réflexion UDP | 65 536, une source inconnue sans réponse au-delà | `RendezvousLimits` |
 | Envoi vers une autre session | 5 s, puis le destinataire est coupé | `RendezvousLimits` |
 | Détenteurs d'une boîte ouverte sans exclusivité | 4 | `RendezvousLimits` |
+| Boîtes ouvertes sur tout le service | 131 072, « service saturé » au-delà | `RendezvousLimits` |
+| Jetons en attente sur tout le service | 16 384, « service saturé » au-delà | `RendezvousLimits` |
 | Relais | 4 Gio et 2 h chacun, 16 par adresse | `RendezvousLimits` |
 | Demandes de pairage en attente | 20, une par expéditeur, 10 min | `PairRequestInbox` |
 | Attente d'un partenaire au relais | 30 s côté service, 20 s côté client | `RendezvousLimits`, `PeerConnector` |
 | Trame du handshake attendue | 15 s | `PeerSession` |
 | Trames scellées reçues avant la fin du handshake | 64 trames, 1 Mio | `PeerSession` |
 | Message reconstitué sur le relais | 16 Mio, un seul à la fois | `RelayPeerLink` |
+| Message reçu sur un lien direct | 2 Mio, fragments bornés en conséquence, lien coupé au-delà | `PeerLinkFactory` |
 | Manifeste reçu, une fois détendu | 5 Mio | `ManifestCodec` |
 | Fichiers d'un manifeste, tailles cumulées | 4 Gio, et la moitié du quota du cache | `ManifestValidator`, `PeerExchange` |
 | Manipulations méta Penumbra, une fois détendues | 4 Mio | `GzipBase64`, `ManifestValidator` |

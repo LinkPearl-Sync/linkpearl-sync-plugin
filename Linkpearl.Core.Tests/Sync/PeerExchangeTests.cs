@@ -32,7 +32,7 @@ public sealed class PeerExchangeTests : IAsyncDisposable
 
     private sealed record Setup(
         PeerExchange Exchange, PeerSession Hostile, FileSystemBlobStore Store, BlobHash Ours, BlobHash Foreign,
-        FixedAppearance Appearance);
+        FixedAppearance Appearance, HeldLink Link);
 
     public async ValueTask DisposeAsync()
     {
@@ -109,13 +109,13 @@ public sealed class PeerExchangeTests : IAsyncDisposable
             PlayerFingerprint.Of("alice", 21));
 
         var limiter = new RateLimiter(_clock, new RateLimiterSettings()) { Bypassed = true };
-        var exchange = new PeerExchange(ours, store, appearance, limiter, 4, 16 * 1024, Quotas.Default, new SilentLog(), mayShare: mayShare);
+        var exchange = new PeerExchange(ours, store, appearance, limiter, 4, 16 * 1024, Quotas.Default, new SilentLog(), _clock, mayShare: mayShare);
 
         _ = PumpAsync(ours, exchange);
         if (serve)
             _ = exchange.ServeAsync(_life.Token);
 
-        return new Setup(exchange, hostile, store, mine, foreign, appearance);
+        return new Setup(exchange, hostile, store, mine, foreign, appearance, linkA);
     }
 
     private async Task PumpAsync(PeerSession session, PeerExchange exchange)
@@ -306,6 +306,77 @@ public sealed class PeerExchangeTests : IAsyncDisposable
 
         await HelloAsync(setup.Hostile);
         Assert.Contains(await DrainAsync(setup.Hostile), m => m.Kind == MessageKind.ManifestData);
+    }
+
+    private static IEnumerable<PeerMessage> Manifests(IEnumerable<PeerMessage> messages)
+        => messages.Where(m => m.Kind == MessageKind.ManifestData);
+
+    [Fact]
+    public async Task Des_demandes_de_manifeste_en_rafale_ne_recoivent_qu_une_reponse()
+    {
+        // Une demande vide de quelques octets faisait compresser et confier au
+        // transport le manifeste entier, des dizaines de kilo-octets, dans une
+        // file que LiteNetLib ne borne pas : mille fois plus en sortie qu'en
+        // entrée, autant de fois que le pair le demande.
+        var setup = await SetupAsync();
+
+        await HelloAsync(setup.Hostile);
+
+        for (var i = 0; i < 50; i++)
+            await SendAsync(setup.Hostile, MessageKind.ManifestRequest, []);
+
+        Assert.Single(Manifests(await DrainAsync(setup.Hostile)));
+
+        // Un vrai changement part aussitôt, quel que soit l'intervalle.
+        setup.Appearance.Manifest = setup.Appearance.Manifest! with { GlamourerState = "une autre tenue" };
+        await SendAsync(setup.Hostile, MessageKind.ManifestRequest, []);
+
+        var answer = Assert.Single(Manifests(await DrainAsync(setup.Hostile)));
+        Assert.True(ManifestCodec.TryDecompress(answer.Payload, Quotas.Default, out var sent, out var why), why);
+        Assert.Equal(ManifestCodec.HashOf(setup.Appearance.Manifest!), ManifestCodec.HashOf(sent!));
+    }
+
+    [Fact]
+    public async Task Une_demande_repetee_trop_tot_est_servie_une_fois_l_intervalle_passe()
+    {
+        // Un pair honnête redemande le même manifeste pour réappliquer, ou
+        // après avoir débloqué une catégorie : il n'en reçoit pas d'autre, et
+        // sa demande ne doit pas se perdre. Elle attend la fin de l'intervalle.
+        var setup = await SetupAsync();
+
+        await HelloAsync(setup.Hostile);
+        await SendAsync(setup.Hostile, MessageKind.ManifestRequest, []);
+        Assert.Single(Manifests(await DrainAsync(setup.Hostile)));
+
+        await SendAsync(setup.Hostile, MessageKind.ManifestRequest, []);
+        await SendAsync(setup.Hostile, MessageKind.ManifestRequest, []);
+        await setup.Exchange.AnswerOwedAsync(default);
+        Assert.Empty(Manifests(await DrainAsync(setup.Hostile)));
+
+        _clock.Advance(PeerExchange.ManifestAnswerInterval);
+        await setup.Exchange.AnswerOwedAsync(default);
+        await setup.Exchange.AnswerOwedAsync(default);
+
+        Assert.Single(Manifests(await DrainAsync(setup.Hostile)));
+    }
+
+    [Fact]
+    public async Task Une_file_de_controle_pleine_differe_la_reponse()
+    {
+        // Le même frein que pour les blocs : un pair qui n'accuse pas ce qu'il
+        // reçoit ne fait pas grossir la file du transport dans le processus
+        // du jeu. La réponse attend que la file se vide, sans se perdre.
+        var setup = await SetupAsync();
+
+        await HelloAsync(setup.Hostile);
+        setup.Link.Pending = PeerExchange.QueuedPacketsPerChannel + 1;
+        await SendAsync(setup.Hostile, MessageKind.ManifestRequest, []);
+        Assert.Empty(Manifests(await DrainAsync(setup.Hostile)));
+
+        setup.Link.Pending = 0;
+        await setup.Exchange.AnswerOwedAsync(default);
+
+        Assert.Single(Manifests(await DrainAsync(setup.Hostile)));
     }
 
     [Fact]

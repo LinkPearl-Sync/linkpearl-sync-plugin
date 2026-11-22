@@ -18,8 +18,8 @@ public abstract record AcceptanceVerdict
     /// Une seconde acceptation du même aléa, sous une autre clé : quelqu'un a
     /// lu la demande et répondu à la place de l'autre, ou avant lui.
     /// </summary>
-    /// <param name="First">Le pair ajouté par la première, à retirer.</param>
-    public sealed record Conflict(PeerId First) : AcceptanceVerdict;
+    /// <param name="First">Le pair ajouté par la première, à retirer, ou null si rien n'était encore conclu.</param>
+    public sealed record Conflict(PeerId? First) : AcceptanceVerdict;
 
     /// <summary>L'expéditeur annoncé n'est pas devant nous : rien n'est conclu, la demande reste ouverte.</summary>
     public sealed record NotVisible : AcceptanceVerdict;
@@ -72,6 +72,12 @@ public sealed class OutgoingPairRequests(IClock clock) : IDisposable
 
         /// <summary>Le pair de la première acceptation, et quand elle a été conclue.</summary>
         public PeerId? ConcludedWith { get; set; }
+
+        /// <summary>L'éphémère de la première acceptation, d'où vient le secret de paire.</summary>
+        public byte[]? ConcludedEphemeral { get; set; }
+
+        /// <summary>L'éphémère annoncé par l'accusé de réception de la cible, s'il est venu.</summary>
+        public byte[]? ReceiptEphemeral { get; set; }
 
         public DateTimeOffset ConcludedAt { get; set; }
 
@@ -141,11 +147,23 @@ public sealed class OutgoingPairRequests(IClock clock) : IDisposable
             // seule que l'aléa a fui.
             if (pending.ConcludedWith is { } first)
             {
-                if (first == from)
+                // L'écho porte aussi le même éphémère. Rien ne lie l'éphémère à
+                // la clé annoncée : un tiers qui connaît la clé de la cible
+                // répondait sous elle avec le sien, en tenait le secret de
+                // paire, et la vraie réponse passait ici pour un écho.
+                if (first == from && pending.ConcludedEphemeral.AsSpan().SequenceEqual(theirEphemeral))
                     return new AcceptanceVerdict.Repeated();
 
                 pending.Annulled = true;
                 return new AcceptanceVerdict.Conflict(first);
+            }
+
+            // La cible a dit d'elle-même quel éphémère elle portera : une
+            // acceptation qui en porte un autre vient de quelqu'un d'autre.
+            if (pending.ReceiptEphemeral is { } announced && announced.AsSpan().SequenceEqual(theirEphemeral) is false)
+            {
+                pending.Annulled = true;
+                return new AcceptanceVerdict.Conflict(null);
             }
 
             // La demande reste ouverte : le vrai destinataire, lui, est devant
@@ -156,9 +174,80 @@ public sealed class OutgoingPairRequests(IClock clock) : IDisposable
             using var ours = pending.Ephemeral!;
             pending.Ephemeral = null;
             pending.ConcludedWith = from;
+            pending.ConcludedEphemeral = theirEphemeral.ToArray();
             pending.ConcludedAt = clock.UtcNow;
 
             return new AcceptanceVerdict.Concluded(PairRequestMessage.AgreeOnPairing(ours, theirEphemeral, nonce));
+        }
+    }
+
+    /// <summary>
+    /// Confronte l'accusé de réception d'une cible à ce qui a déjà été répondu.
+    /// </summary>
+    /// <remarks>
+    /// Retrouvé par l'aléa seul : l'accusé ne nomme personne. Un accusé qui
+    /// contredit une acceptation déjà conclue la démasque, sans attendre que
+    /// la cible accepte, ce qu'elle ne fera peut-être jamais : c'est ce qui
+    /// laissait un tiers, lisant la demande sur un service où la cible
+    /// n'écoute pas, garder le pairage. Deux accusés différents disent deux
+    /// destinataires : la demande est annulée de même.
+    /// </remarks>
+    public AcceptanceVerdict NoteReceipt(ReadOnlySpan<byte> nonce, ReadOnlySpan<byte> theirEphemeral)
+    {
+        lock (_gate)
+        {
+            Purge();
+
+            Pending? pending = null;
+
+            foreach (var candidate in _byTarget.Values)
+            {
+                if (candidate.Nonce.AsSpan().SequenceEqual(nonce))
+                    pending = candidate;
+            }
+
+            if (pending is null)
+                return new AcceptanceVerdict.Unknown();
+
+            if (pending.Annulled)
+                return new AcceptanceVerdict.Repeated();
+
+            if (pending.ReceiptEphemeral is { } first)
+            {
+                if (first.AsSpan().SequenceEqual(theirEphemeral))
+                    return new AcceptanceVerdict.Repeated();
+
+                pending.Annulled = true;
+                return new AcceptanceVerdict.Conflict(pending.ConcludedWith);
+            }
+
+            pending.ReceiptEphemeral = theirEphemeral.ToArray();
+
+            if (pending.ConcludedWith is { } concluded
+                && pending.ConcludedEphemeral.AsSpan().SequenceEqual(theirEphemeral) is false)
+            {
+                pending.Annulled = true;
+                return new AcceptanceVerdict.Conflict(concluded);
+            }
+
+            return new AcceptanceVerdict.Repeated();
+        }
+    }
+
+    /// <summary>Vrai si cet aléa est celui d'une de nos demandes, quelle qu'en soit la cible.</summary>
+    public bool ConcernsNonce(ReadOnlySpan<byte> nonce)
+    {
+        lock (_gate)
+        {
+            Purge();
+
+            foreach (var pending in _byTarget.Values)
+            {
+                if (pending.Nonce.AsSpan().SequenceEqual(nonce))
+                    return true;
+            }
+
+            return false;
         }
     }
 

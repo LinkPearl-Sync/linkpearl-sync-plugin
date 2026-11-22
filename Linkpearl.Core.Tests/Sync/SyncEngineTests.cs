@@ -767,6 +767,38 @@ public sealed class SyncEngineTests : IDisposable
     }
 
     [Fact]
+    public async Task Un_blocage_s_applique_sans_attendre_la_reponse_du_pair()
+    {
+        // Le réglage est le recours contre une animation bien formée mais
+        // nuisible : il ne peut pas dépendre du bon vouloir du pair. Celui-ci
+        // garde sa session ouverte mais ne répond plus aux demandes de
+        // manifeste, et l'animation restait posée, puis reposée à chaque retour
+        // dans le champ.
+        await using var world = await TwoEnginesAsync(withAnimation: true);
+
+        IReadOnlyList<VisiblePlayer> sees = [new VisiblePlayer(new GameObjectRef(4, 100), AlicePrint)];
+
+        Assert.True(await world.SettleAsync(() => world.BobApplicator.Applied.Count > 0, [], sees),
+            "l'apparence n'a jamais été posée : " + world.Describe());
+        Assert.Contains(IdlePath, world.BobApplicator.Applied[^1].Manifest.Replacements.SelectMany(r => r.GamePaths));
+
+        world.AliceAppearance.Manifest = null;
+        world.Bob.SetGlobalReceive(TransientCategories.All with { Animations = false });
+
+        Assert.True(await world.SettleAsync(() => world.BobApplicator.Applied.Count > 1, [], sees, rounds: 300),
+            "le blocage n'a pas été reposé : " + world.Describe());
+        Assert.DoesNotContain(IdlePath, world.BobApplicator.Applied[^1].Manifest.Replacements.SelectMany(r => r.GamePaths));
+
+        // Sorti du champ puis revenu : ce qui est reposé reste filtré.
+        Assert.True(await world.SettleAsync(() => world.BobApplicator.Removed.Count > 0, [], []));
+        var applied = world.BobApplicator.Applied.Count;
+
+        Assert.True(await world.SettleAsync(() => world.BobApplicator.Applied.Count > applied, [], sees),
+            "l'apparence n'a pas été reposée au retour : " + world.Describe());
+        Assert.DoesNotContain(IdlePath, world.BobApplicator.Applied[^1].Manifest.Replacements.SelectMany(r => r.GamePaths));
+    }
+
+    [Fact]
     public async Task Le_blocage_global_s_ajoute_a_celui_du_pair()
     {
         await using var world = await TwoEnginesAsync(withAnimation: true);
@@ -1179,7 +1211,30 @@ public sealed class SyncEngineTests : IDisposable
         Assert.Empty(world.BobApplicator.Applied);
     }
 
-    private async Task<TwoEngines> TwoEnginesAsync(PlayerFingerprint? pinOnBob = null, bool withAnimation = false, IServiceBans? bobBans = null, IServiceBans? aliceBans = null)
+    [Fact]
+    public async Task Une_exception_imprevue_dans_le_dialogue_ferme_la_session()
+    {
+        // Un cache qui refuse d'écrire lève au premier bloc reçu, et rien dans
+        // la réception ne s'y attend. La pompe s'arrêtait là, la session
+        // restait ouverte sans plus personne pour la lire, et ce que le pair
+        // envoyait ensuite s'entassait en mémoire. Fermée, elle tombe et se
+        // rejoint au lieu de rester muette.
+        await using var world = await TwoEnginesAsync(bobCache: new FakeBlobStore());
+
+        IReadOnlyList<VisiblePlayer> sees = [new VisiblePlayer(new GameObjectRef(4, 100), AlicePrint)];
+
+        Assert.True(
+            await world.SettleAsync(() => world.BobLog.All.Any(line => line.Contains("dialogue interrompu", StringComparison.Ordinal)), [], sees),
+            "la réception n'a jamais levé : " + world.Describe());
+
+        Assert.True(
+            await world.SettleAsync(() => world.BobLog.All.Any(line => line.Contains("session tombée", StringComparison.Ordinal)), [], sees, rounds: 200),
+            "la session est restée ouverte sans lecteur : " + world.Describe());
+    }
+
+    private async Task<TwoEngines> TwoEnginesAsync(
+        PlayerFingerprint? pinOnBob = null, bool withAnimation = false, IServiceBans? bobBans = null, IServiceBans? aliceBans = null,
+        IBlobStore? bobCache = null)
     {
         var alice = CryptoPrimitives.GenerateIdentity();
         var bob = CryptoPrimitives.GenerateIdentity();
@@ -1243,7 +1298,7 @@ public sealed class SyncEngineTests : IDisposable
 
         var bobEngine = new SyncEngine(
             bobBook, new MeetingDialer(point), new FixedAppearance(null, BobPrint), bobApplicator,
-            bobStore, bobId, bob, _clock, bobLog, bans: bobBans);
+            bobCache ?? bobStore, bobId, bob, _clock, bobLog, bans: bobBans);
 
         return new TwoEngines(
             aliceEngine, bobEngine, bobBook, bobApplicator, bobStore, aliceId, hash, content.Length,

@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using Linkpearl.Core.Abstractions;
 using Linkpearl.Core.Crypto;
 using Linkpearl.Core.Identity;
+using Linkpearl.Core.Safety;
 using Linkpearl.Core.Transport.Rendezvous;
 
 namespace Linkpearl.Core.Groups;
@@ -21,10 +22,14 @@ public sealed record PendingValidation(
 /// Appelé depuis le fil qui lit les boîtes et depuis l'interface : tout passe
 /// sous un verrou. Le verrou du carnet de groupes est pris après le nôtre,
 /// jamais l'inverse.
+///
+/// Le filtre des services rend un verdict à trois états et non un refus : un
+/// verdict en attente (budget de dérivations épuisé) ne dit rien du candidat,
+/// et ne doit pas se mémoriser comme un verdict de liste.
 /// </remarks>
 public sealed class AdmissionHost(
     GroupBook book, Func<byte[]?> ourIdentityKey, IClock clock,
-    Func<AdmissionRequest, PlayerFingerprint, bool>? refuses = null,
+    Func<AdmissionRequest, PlayerFingerprint, BanVerdict>? screen = null,
     Func<PlayerFingerprint?>? ourFingerprint = null) : IDisposable
 {
     /// <summary>Au-delà, on répond « trop d'essais » sans vérifier.</summary>
@@ -138,11 +143,11 @@ public sealed class AdmissionHost(
         if (Answer(request, candidate, screened: null) is { } answers)
             return answers;
 
-        return Answer(request, candidate, refuses!(request, candidate)) ?? [];
+        return Answer(request, candidate, screen!(request, candidate)) ?? [];
     }
 
     /// <summary>La décision, ou null s'il faut d'abord consulter le filtre des services.</summary>
-    private IReadOnlyList<AdmissionOutbound>? Answer(AdmissionRequest request, PlayerFingerprint candidate, bool? screened)
+    private IReadOnlyList<AdmissionOutbound>? Answer(AdmissionRequest request, PlayerFingerprint candidate, BanVerdict? screened)
     {
         var group = Admitting(request.Code);
 
@@ -191,14 +196,11 @@ public sealed class AdmissionHost(
                 // groupe. Après les plafonds et pour une demande neuve seulement :
                 // le filtre coûte une dérivation, et une inondation de demandes
                 // forgées ne doit pas la payer au-delà de ce que le plafond laisse.
-                if (refuses is not null && screened is null)
+                if (screen is not null && screened is null)
                     return null;
 
-                if (screened is true)
-                {
-                    _answered[key] = now;
-                    return [];
-                }
+                if (Screened(key, screened, now) is { } unanswered)
+                    return unanswered;
 
                 _pending[key] = new Waiting(group.Id, request, candidate, now);
                 return [];
@@ -224,14 +226,11 @@ public sealed class AdmissionHost(
             // groupe. Après les plafonds et pour une demande neuve seulement :
             // le filtre coûte une dérivation, et une inondation de demandes
             // forgées ne doit pas la payer au-delà de ce que le plafond laisse.
-            if (refuses is not null && screened is null)
+            if (screen is not null && screened is null)
                 return null;
 
-            if (screened is true)
-            {
-                _answered[key] = now;
-                return [];
-            }
+            if (Screened(key, screened, now) is { } silence)
+                return silence;
 
             var ephemeral = CryptoPrimitives.GenerateEphemeral();
             var challenge = new AdmissionChallenge(request.Nonce, CryptoPrimitives.ExportPublicPoint(ephemeral));
@@ -239,6 +238,33 @@ public sealed class AdmissionHost(
             _challenges[key] = new Challenge(group.Id, request, candidate, ephemeral, outbound, now, now);
 
             return [outbound with { Payload = [.. outbound.Payload] }];
+        }
+    }
+
+    /// <summary>
+    /// Ce que le verdict du filtre impose, ou null si la demande peut suivre son cours.
+    /// </summary>
+    /// <remarks>
+    /// Sous <see cref="_gate"/>. Seul un candidat listé est mémorisé comme
+    /// répondu : ses redépôts ne refont pas la dérivation. Un verdict en
+    /// attente veut dire que le budget est pris, que n'importe qui peut remplir
+    /// en forgeant des demandes. Mémorisé, il faisait ignorer chaque redépôt
+    /// pendant <see cref="AnswerMemory"/>, plus longtemps que la candidature ne
+    /// vit. Oublié, le redépôt de la minute suivante est filtré à nouveau.
+    /// </remarks>
+    private IReadOnlyList<AdmissionOutbound>? Screened(string key, BanVerdict? screened, DateTimeOffset now)
+    {
+        switch (screened)
+        {
+            case BanVerdict.Listed:
+                _answered[key] = now;
+                return [];
+
+            case BanVerdict.Pending:
+                return [];
+
+            default:
+                return null;
         }
     }
 

@@ -109,9 +109,12 @@ public sealed class PairRequestInbox<T>(IClock clock) where T : class
     /// trame nous arrive par autant de chemins que nous partageons de services
     /// avec lui. La mémoire est bornée et oublie au bout de <see cref="Lifetime"/>.
     /// </remarks>
-    public bool Witness(PeerId id, ReadOnlySpan<byte> nonce)
+    public bool Witness(PeerId id, ReadOnlySpan<byte> nonce, ReadOnlySpan<byte> ephemeral = default)
     {
-        var key = $"{id.ToHex()}:{Convert.ToHexStringLower(nonce)}";
+        // L'éphémère fait partie de l'écho : la même trame reçue par un autre
+        // service le porte aussi. Sous la même clé, un autre éphémère est une
+        // autre réponse, que le demandeur doit voir pour annuler.
+        var key = $"{id.ToHex()}:{Convert.ToHexStringLower(nonce)}:{Convert.ToHexStringLower(ephemeral)}";
 
         lock (_gate)
         {

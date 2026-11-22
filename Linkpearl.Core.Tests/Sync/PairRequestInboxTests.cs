@@ -33,6 +33,20 @@ public class PairRequestInboxTests
     }
 
     [Fact]
+    public void Un_autre_ephemere_sous_la_meme_cle_et_le_meme_alea_n_est_pas_un_echo()
+    {
+        // Un écho porte le même éphémère. Sous la même clé, un autre éphémère
+        // est un second répondant : le jeter ici empêchait de voir le conflit.
+        var inbox = new PairRequestInbox<Request>(new FakeClock());
+        var nonce = Nonce();
+        var (first, second) = (Nonce(), Nonce());
+
+        Assert.True(inbox.Witness(Key(1), nonce, first));
+        Assert.False(inbox.Witness(Key(1), nonce, first));
+        Assert.True(inbox.Witness(Key(1), nonce, second));
+    }
+
+    [Fact]
     public void Une_seule_demande_par_expediteur_la_derniere_remplace()
     {
         var inbox = new PairRequestInbox<Request>(new FakeClock());

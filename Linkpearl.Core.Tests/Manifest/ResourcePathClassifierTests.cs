@@ -11,9 +11,47 @@ namespace Linkpearl.Core.Tests.Manifest;
 /// </summary>
 public class ResourcePathClassifierTests
 {
+    /// <summary>Les dossiers de mods des exemples ci-dessous, où le confinement n'est pas le sujet.</summary>
+    private static readonly string[] Roots =
+        [@"C:\mods", @"C:\Users\yann\Penumbra", @"D:\Jeux\FFXIV\mods", @"\\serveur\partage", "/home/yann/mods"];
+
     private static ClassifiedResources Classify(params (string Actual, string[] Game)[] entries)
+        => Within(Roots, entries);
+
+    private static ClassifiedResources Within(IReadOnlyCollection<string> roots, params (string Actual, string[] Game)[] entries)
         => ResourcePathClassifier.Classify(
-            entries.Select(e => (e.Actual, (IReadOnlyCollection<string>)e.Game)), Quotas.Default);
+            entries.Select(e => (e.Actual, (IReadOnlyCollection<string>)e.Game)), Quotas.Default, roots);
+
+    private const string Body = "chara/human/c0201/obj/body/b0001/texture/--c0201b0001_base.tex";
+
+    [Theory]
+    [InlineData(@"C:\Users\yann\Documents\secret.tex")]
+    [InlineData(@"C:\Penumbra\..\Users\yann\secret.tex")]
+    [InlineData(@"C:\Penumbra\MonMod\..\..\secret.tex")]
+    [InlineData(@"C:\Penumbra2\MonMod\corps.tex")]
+    [InlineData(@"\\?\C:\Penumbra\MonMod\corps.tex")]
+    [InlineData(@"\\serveur\partage\corps.tex")]
+    [InlineData(@"C:\Penumbra\MonMod\.. \..\secret.tex")]
+    public void Un_fichier_hors_du_dossier_de_mods_n_est_jamais_annonce(string actual)
+    {
+        // Un mod qui redirige un chemin du joueur vers un fichier quelconque
+        // du disque le faisait lire, garder en cache et servir à ses pairs.
+        var result = Within([@"C:\Penumbra"], (actual, [Body]));
+
+        Assert.Empty(result.Files);
+        Assert.Equal(Body, Assert.Single(result.Skipped).GamePath);
+    }
+
+    [Theory]
+    [InlineData(@"C:\Penumbra\MonMod\corps.tex")]
+    [InlineData("c:/penumbra/MonMod/corps.tex")]
+    [InlineData(@"C:\Penumbra\\MonMod\corps.tex")]
+    public void Un_fichier_du_dossier_de_mods_est_annonce_quelle_que_soit_sa_graphie(string actual)
+        => Assert.Single(Within([@"C:\Penumbra\"], (actual, [Body])).Files);
+
+    [Fact]
+    public void Sans_dossier_de_mods_connu_aucun_fichier_n_est_annonce()
+        => Assert.Empty(Within([], (@"C:\Penumbra\MonMod\corps.tex", [Body])).Files);
 
     [Fact]
     public void Un_fichier_windows_redirige_est_un_fichier_a_transferer()

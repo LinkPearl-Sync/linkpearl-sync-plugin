@@ -31,9 +31,13 @@ public sealed record ClassifiedResources(
 /// </remarks>
 public static class ResourcePathClassifier
 {
+    /// <summary>Raison donnée pour un fichier redirigé hors du dossier de mods.</summary>
+    public const string OutsideModDirectory = "fichier hors du dossier de mods de Penumbra";
+
     public static ClassifiedResources Classify(
         IEnumerable<(string ActualPath, IReadOnlyCollection<string> GamePaths)> resources,
-        Quotas quotas)
+        Quotas quotas,
+        IReadOnlyCollection<string> localRoots)
     {
         var files = new List<LocalFile>();
         var swaps = new List<FileSwap>();
@@ -48,6 +52,17 @@ public static class ResourcePathClassifier
             // montré à l'utilisateur.
             var isLocalFile = LooksLikeFileSystemPath(actualPath);
             string? target = null;
+
+            // Un fichier hors du dossier de mods n'est pas un fichier de mod :
+            // rapporté sous ses chemins de jeu, jamais sous le chemin local,
+            // qui porte le nom de l'utilisateur.
+            if (isLocalFile && LocalFileContainment.IsUnder(actualPath, localRoots) is false)
+            {
+                foreach (var raw in rawGamePaths)
+                    skipped.Add(new SkippedFile(raw, OutsideModDirectory));
+
+                continue;
+            }
 
             if (isLocalFile is false)
             {

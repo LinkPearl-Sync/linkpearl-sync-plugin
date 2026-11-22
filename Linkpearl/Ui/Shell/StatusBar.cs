@@ -53,7 +53,9 @@ internal static class StatusBar
         // Il s'agit de la disponibilité du service, pas de celle du plugin :
         // les sessions déjà établies peuvent continuer sans lui.
         var state  = status.Connected ? "Service disponible" : "Service indisponible";
-        var detail = status.Connected ? status.Character : status.Failure;
+        // La panne peut porter le texte d'un service : nettoyée comme
+        // l'infobulle qui la montre en entier.
+        var detail = status.Connected ? status.Character : status.Failure is { } failure ? Glyphs.Safe(failure) : null;
         var left   = detail is null ? state : $"{state} · {detail}";
 
         // Décompte des pairs, à droite. Mesuré d'abord : c'est lui qui borne
@@ -104,18 +106,35 @@ internal static class StatusBar
             Feedback.Tooltip(() => Text.Body(left));
     }
 
+    /// <summary>Au plus ce nombre de caractères est mesuré : la barre n'en montre jamais autant.</summary>
+    private const int MaxShownChars = 256;
+
     /// <summary>Le texte tel quel s'il tient dans la largeur, sinon abrégé par « … ».</summary>
+    /// <remarks>
+    /// Par dichotomie sur un préfixe borné. Retirer un caractère à la fois en
+    /// remesurant tout le préfixe coûtait un temps quadratique en la longueur
+    /// du texte, à chaque image : un texte de service de 64 Kio figeait le jeu
+    /// des secondes durant.
+    /// </remarks>
     private static string Ellipsize(string text, float room)
     {
-        if (ImGui.CalcTextSize(text).X <= room)
+        if (text.Length <= MaxShownChars && ImGui.CalcTextSize(text).X <= room)
             return text;
 
         const string ellipsis = "…";
 
-        var length = text.Length;
-        while (length > 0 && ImGui.CalcTextSize(text[..length] + ellipsis).X > room)
-            length--;
+        var (fits, tooLong) = (0, Math.Min(text.Length, MaxShownChars));
 
-        return text[..length].TrimEnd(' ', ',') + ellipsis;
+        while (fits < tooLong)
+        {
+            var middle = (fits + tooLong + 1) / 2;
+
+            if (ImGui.CalcTextSize(text[..middle] + ellipsis).X <= room)
+                fits = middle;
+            else
+                tooLong = middle - 1;
+        }
+
+        return text[..fits].TrimEnd(' ', ',') + ellipsis;
     }
 }

@@ -1,5 +1,8 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
+using LiteNetLib;
+using Linkpearl.Core.Safety;
 using Linkpearl.Core.Tests.Sync;
 using Linkpearl.Core.Transport;
 using Xunit;
@@ -150,6 +153,87 @@ public class PeerLinkFactoryTests
     }
 
     [Fact]
+    public async Task Un_tiers_qui_connait_le_jeton_ne_prend_pas_la_tentative()
+    {
+        // Le jeton passe en clair, et tout membre d'un groupe (ou n'importe
+        // qui pour le Public) peut le dériver. Présenté depuis une adresse que
+        // la tentative n'a pas composée, il ne doit pas la servir.
+        await using var net = new LoopbackFactories(2);
+        var (us, intruder) = (net.Factories[0], net.Factories[1]);
+        using var absent = Silent(out var peerAt);
+
+        var ours = us.ConnectAsync([peerAt], "jeton-de-la-paire", Short, default);
+        await Task.Delay(100);
+        var theirs = await intruder.ConnectAsync([LoopbackFactories.At(us)], "jeton-de-la-paire", Short, default);
+
+        Assert.Null(await ours);
+        Assert.Null(theirs);
+    }
+
+    /// <summary>Une réponse de réflexion telle que LiteNetLib la livre : son en-tête, puis la réponse du service.</summary>
+    private static byte[] Reflected(IPEndPoint seen)
+    {
+        var address = seen.Address.GetAddressBytes();
+        return [0x09, 0x08, (byte)address.Length, .. address, (byte)(seen.Port >> 8), (byte)seen.Port];
+    }
+
+    /// <summary>Un faux rendez-vous qui répond à la première requête reçue par <paramref name="answer"/>.</summary>
+    private static async Task AnswerOnceAsync(Socket rendezvous, IPEndPoint answer)
+    {
+        var buffer = new byte[64];
+        var received = await rendezvous.ReceiveFromAsync(buffer, new IPEndPoint(IPAddress.Any, 0));
+        await rendezvous.SendToAsync(Reflected(answer), received.RemoteEndPoint);
+    }
+
+    [Fact]
+    public async Task La_reflexion_n_ecoute_que_le_rendez_vous_interroge()
+    {
+        await using var net = new LoopbackFactories(1);
+        var us = net.Factories[0];
+        using var rendezvous = Silent(out var rendezvousAt);
+        using var intruder = Silent(out _);
+
+        // Un tiers qui connaît notre socket inonde de fausses réponses : un
+        // port nul ferait refuser tout notre bloc de candidats par le pair.
+        using var stop = new CancellationTokenSource();
+        var forging = Task.Run(async () =>
+        {
+            while (stop.IsCancellationRequested is false)
+            {
+                await intruder.SendToAsync(Reflected(new IPEndPoint(IPAddress.Parse("203.0.113.7"), 0)), LoopbackFactories.At(us));
+                await Task.Delay(20);
+            }
+        });
+
+        var answering = Task.Run(async () =>
+        {
+            await Task.Delay(400);
+            await AnswerOnceAsync(rendezvous, new IPEndPoint(IPAddress.Parse("198.51.100.7"), 40000));
+        });
+
+        var seen = await us.ReflectAsync(rendezvousAt, Long, default);
+        await stop.CancelAsync();
+        await forging;
+        await answering;
+
+        Assert.Equal(new IPEndPoint(IPAddress.Parse("198.51.100.7"), 40000), seen);
+    }
+
+    [Fact]
+    public async Task Une_reflexion_inutilisable_est_ignoree()
+    {
+        await using var net = new LoopbackFactories(1);
+        var us = net.Factories[0];
+        using var rendezvous = Silent(out var rendezvousAt);
+
+        var answering = AnswerOnceAsync(rendezvous, new IPEndPoint(IPAddress.Parse("198.51.100.7"), 0));
+        var seen = await us.ReflectAsync(rendezvousAt, Short, default);
+        await answering;
+
+        Assert.Null(seen);
+    }
+
+    [Fact]
     public async Task Une_connexion_que_personne_n_attend_est_refermee()
     {
         // Autorisée mais sans abonné ni tentative : le lien resterait ouvert
@@ -170,4 +254,69 @@ public class PeerLinkFactoryTests
 
         Assert.False(link.IsOpen);
     }
+
+    /// <summary>Un pair muni du jeton, mais pas de notre code : il envoie ce qu'il veut.</summary>
+    private static async Task<(NetManager Manager, NetPeer Peer)> RawPeerAsync(PeerLinkFactory us, string token)
+    {
+        var manager = new NetManager(new EventBasedNetListener()) { ChannelsCount = 2 };
+        manager.Start();
+        var peer = manager.Connect(LoopbackFactories.At(us), token);
+
+        for (var waited = 0; peer.ConnectionState is not ConnectionState.Connected && waited < 5000; waited += 20)
+            await Task.Delay(20);
+
+        Assert.Equal(ConnectionState.Connected, peer.ConnectionState);
+        return (manager, peer);
+    }
+
+    [Fact]
+    public async Task Un_message_direct_au_dela_du_plafond_n_est_jamais_remis()
+    {
+        // Le relais bornait déjà un message reconstitué, le lien direct non :
+        // LiteNetLib y acceptait 65 535 fragments par message, en préallouant
+        // sur la foi du nombre annoncé, et la fabrique copiait le tout avant
+        // la moindre vérification de la session.
+        await using var net = new LoopbackFactories(1);
+        var us = net.Factories[0];
+        var sizes = new ConcurrentQueue<int>();
+        us.Accepted += (_, link) => link.Received += (_, payload) => sizes.Enqueue(payload.Length);
+        us.Allow("jeton-du-pair", "pair");
+
+        var (manager, peer) = await RawPeerAsync(us, "jeton-du-pair");
+
+        try
+        {
+            peer.Send(new byte[PeerLinkFactory.MaxMessageLength + 4096], 0, DeliveryMethod.ReliableOrdered);
+            await Task.Delay(2000);
+
+            Assert.DoesNotContain(sizes, size => size > PeerLinkFactory.MaxMessageLength);
+        }
+        finally
+        {
+            manager.Stop();
+        }
+    }
+
+    [Fact]
+    public async Task Un_message_au_plafond_passe_encore_en_direct()
+    {
+        await using var net = new LoopbackFactories(2);
+        var (us, them) = (net.Factories[0], net.Factories[1]);
+        var arrived = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        us.Accepted += (_, link) => link.Received += (_, payload) => arrived.TrySetResult(payload.Length);
+        us.Allow("jeton-du-pair", "pair");
+
+        var link = await them.ConnectAsync([LoopbackFactories.At(us)], "jeton-du-pair", Long, default);
+        Assert.NotNull(link);
+
+        await link.SendAsync(0, new byte[PeerLinkFactory.MaxMessageLength], default);
+
+        Assert.Equal(PeerLinkFactory.MaxMessageLength, await arrived.Task.WaitAsync(Long));
+    }
+
+    [Fact]
+    public void Le_plafond_direct_laisse_passer_le_plus_gros_manifeste_accepte()
+        // Le manifeste compressé est le plus gros message légitime ; son
+        // enveloppe chiffrée ajoute quelques dizaines d'octets.
+        => Assert.True(PeerLinkFactory.MaxMessageLength >= Quotas.Default.MaxManifestCompressedBytes + 1024);
 }

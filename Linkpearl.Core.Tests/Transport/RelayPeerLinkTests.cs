@@ -47,6 +47,60 @@ internal sealed class MemoryPipe(Channel<byte[]> outgoing, Channel<byte[]> incom
     }
 }
 
+/// <summary>
+/// Un relais qui a cessé de lire : passé une taille, chaque écriture attend
+/// qu'on la libère, comme un envoi TCP face à une fenêtre fermée.
+/// </summary>
+internal sealed class StalledPipe(int passesUpTo = 0) : IRelayPipe
+{
+    private readonly Channel<byte[]> _incoming = Channel.CreateUnbounded<byte[]>();
+    private readonly TaskCompletionSource _released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Ce qui est passé, dans l'ordre.</summary>
+    public System.Collections.Concurrent.ConcurrentQueue<byte[]> Written { get; } = new();
+
+    public int Unread => _incoming.Reader.Count;
+
+    public void Feed(byte[] frame) => _incoming.Writer.TryWrite(frame);
+
+    public void Release() => _released.TrySetResult();
+
+    /// <summary>Une sonde du relais : type 0x02, canal 0, un horodatage de huit octets.</summary>
+    public static byte[] Ping(long stamp)
+    {
+        var frame = new byte[2 + sizeof(long)];
+        frame[0] = 0x02;
+        System.Buffers.Binary.BinaryPrimitives.WriteInt64BigEndian(frame.AsSpan(2), stamp);
+        return frame;
+    }
+
+    public async Task SendAsync(ReadOnlyMemory<byte> payload, CancellationToken ct)
+    {
+        if (payload.Length > passesUpTo)
+            await _released.Task.WaitAsync(ct).ConfigureAwait(false);
+
+        Written.Enqueue(payload.ToArray());
+    }
+
+    public async Task<byte[]?> ReceiveAsync(CancellationToken ct)
+    {
+        try
+        {
+            return await _incoming.Reader.ReadAsync(ct).ConfigureAwait(false);
+        }
+        catch (ChannelClosedException)
+        {
+            return null;
+        }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        _incoming.Writer.TryComplete();
+        return ValueTask.CompletedTask;
+    }
+}
+
 public class RelayPeerLinkTests
 {
     private static readonly TimeSpan Patience = TimeSpan.FromSeconds(5);
@@ -276,6 +330,36 @@ public class RelayPeerLinkTests
         Assert.False(b.IsOpen);
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => b.SendAsync(1, new byte[] { 1 }, CancellationToken.None).AsTask());
+    }
+
+    [Fact]
+    public async Task Une_seule_reponse_aux_sondes_attend_a_la_fois()
+    {
+        // Le relais lit nos sondes avant toute authentification. S'il cesse de
+        // lire ce qu'on lui renvoie, chaque sonde laissait un écho de plus en
+        // attente du verrou d'écriture, sans borne : des centaines d'octets
+        // gardés en mémoire pour quinze reçus.
+        var pipe = new StalledPipe();
+        var link = new RelayPeerLink(pipe, null);
+        _ = Collect(link);
+
+        for (var i = 0; i < 1000; i++)
+            pipe.Feed(StalledPipe.Ping(i));
+
+        var deadline = DateTime.UtcNow + Patience;
+
+        while (pipe.Unread > 0 && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+
+        Assert.Equal(0, pipe.Unread);
+
+        // Libérées, les réponses en attente partent toutes : on les compte.
+        pipe.Release();
+        await Task.Delay(300);
+
+        Assert.Equal(1, pipe.Written.Count(frame => frame[0] == 0x03));
+
+        await link.DisposeAsync();
     }
 
     [Fact]

@@ -40,6 +40,17 @@ public sealed class RemoteApplicator : IRemoteApplicator, IDisposable
     private readonly Dictionary<PeerId, AppliedPeer> _applied = [];
     private readonly Lock _gate = new();
 
+    /// <summary>
+    /// Le plus grand os animé par chaque animation reçue, ou null si le chargeur ne la lit pas.
+    /// </summary>
+    /// <remarks>
+    /// Par chemin dans le cache, dont le nom est le hash du contenu : un même
+    /// chemin désigne toujours le même fichier, et chaque animation ne passe
+    /// qu'une fois par le chargeur Havok, sur le thread du jeu.
+    /// </remarks>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int?> _papBones =
+        new(StringComparer.OrdinalIgnoreCase);
+
     private volatile string? _blockedBecause = "le jeu n'est pas encore prêt";
     private bool _penumbraAnswered;
     private int _sinceProbe;
@@ -93,25 +104,39 @@ public sealed class RemoteApplicator : IRemoteApplicator, IDisposable
         if (plan!.Dropped.Count > 0)
             _log.Warning($"Transitoires mal formés écartés ({plan.Dropped.Count}) : {string.Join(" ; ", plan.Dropped.Take(5))}");
 
-        await _framework.RunOnFrameworkThread(() =>
+        var pathMap = new Dictionary<string, string>(plan.PathMap);
+        var animations = ReceivedAnimationScreen.ToInspect(pathMap, Path.IsPathRooted);
+        var pending = ReadAnimations(animations, pathMap, ct);
+
+        try
         {
-            if (Resolve(target) is false)
+            await _framework.RunOnFrameworkThread(() =>
             {
-                // L'index a changé de propriétaire depuis que le moteur a
-                // apparié. Poser ici mettrait l'apparence du pair sur un
-                // inconnu, chez nous seuls.
-                _log.Debug("Objet périmé au moment de poser, application abandonnée.");
-                return;
-            }
+                if (Resolve(target) is false)
+                {
+                    // L'index a changé de propriétaire depuis que le moteur a
+                    // apparié. Poser ici mettrait l'apparence du pair sur un
+                    // inconnu, chez nous seuls.
+                    _log.Debug("Objet périmé au moment de poser, application abandonnée.");
+                    return;
+                }
 
-            var collection = CollectionFor(peer);
+                DropUnplayable(target, animations, pathMap, pending);
 
-            _penumbra.AssignCollection(collection, target.ObjectIndex);
-            _penumbra.SetTemporaryMod(collection, new Dictionary<string, string>(plan!.PathMap), plan.MetaManipulations);
-            _penumbra.Redraw(target.ObjectIndex);
+                var collection = CollectionFor(peer);
 
-            Remember(peer, applied => applied with { Object = target });
-        }).ConfigureAwait(false);
+                _penumbra.AssignCollection(collection, target.ObjectIndex);
+                _penumbra.SetTemporaryMod(collection, pathMap, plan.MetaManipulations);
+                _penumbra.Redraw(target.ObjectIndex);
+
+                Remember(peer, applied => applied with { Object = target });
+            }).ConfigureAwait(false);
+        }
+        finally
+        {
+            foreach (var (_, buffer, _) in pending.Values)
+                System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
+        }
 
         if (plan!.GlamourerState is { } state)
         {
@@ -281,6 +306,76 @@ public sealed class RemoteApplicator : IRemoteApplicator, IDisposable
     /// L'index change au rechargement de zone. L'identifiant stable est ce qui
     /// permet de s'en apercevoir plutôt que de poser sur quelqu'un d'autre.
     /// </remarks>
+    /// <summary>
+    /// Lit, hors du thread du jeu, la section Havok des animations reçues pas encore jugées.
+    /// </summary>
+    /// <remarks>
+    /// Un fichier mal formé est jugé tout de suite, illisible ; un fichier
+    /// qu'on ne peut pas ouvrir à l'instant n'est pas retenu en cache, et
+    /// l'animation est écartée pour cette fois seulement.
+    /// </remarks>
+    private Dictionary<string, (string GamePath, byte[] Buffer, int Length)> ReadAnimations(
+        IReadOnlyList<string> animations, IReadOnlyDictionary<string, string> pathMap, CancellationToken ct)
+    {
+        var pending = new Dictionary<string, (string, byte[], int)>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var gamePath in animations)
+        {
+            ct.ThrowIfCancellationRequested();
+            var local = pathMap[gamePath];
+
+            if (_papBones.ContainsKey(local) || pending.ContainsKey(local))
+                continue;
+
+            try
+            {
+                if (PapSkeletonCheck.TryReadHavok(local, gamePath, out var buffer, out var length))
+                    pending[local] = (gamePath, buffer, length);
+                else
+                    _papBones[local] = null;
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                _log.Debug($"Animation reçue illisible pour l'instant : {gamePath} ({e.GetType().Name})");
+            }
+        }
+
+        return pending;
+    }
+
+    /// <summary>
+    /// Retire de la table les animations que le squelette de la cible ne peut pas jouer. Thread du jeu.
+    /// </summary>
+    /// <remarks>
+    /// Le chargeur Havok du jeu lit ici des octets venus d'un pair : c'est le
+    /// même qui les lirait à la première émote, et il ne les lit qu'une fois
+    /// par fichier. Des chemins de jeu seulement dans le journal.
+    /// </remarks>
+    private void DropUnplayable(
+        GameObjectRef target, IReadOnlyList<string> animations, Dictionary<string, string> pathMap,
+        Dictionary<string, (string GamePath, byte[] Buffer, int Length)> pending)
+    {
+        if (animations.Count == 0)
+            return;
+
+        foreach (var (local, (_, buffer, length)) in pending)
+            _papBones[local] = PapSkeletonCheck.MaxAnimatedBone(buffer.AsSpan(0, length));
+
+        var bones = _objects[target.ObjectIndex] is { } found ? PapSkeletonCheck.BoneCount(found) : null;
+        var seen = animations.ToDictionary(
+            gamePath => gamePath,
+            gamePath => _papBones.TryGetValue(pathMap[gamePath], out var most) ? most : null);
+
+        var refused = ReceivedAnimationScreen.Refused(seen, bones);
+
+        foreach (var gamePath in refused)
+            pathMap.Remove(gamePath);
+
+        if (refused.Count > 0)
+            _log.Warning($"{refused.Count} animation(s) reçue(s) écartée(s), hors du squelette de la cible ({bones} os) ou illisible(s) : "
+                       + string.Join(", ", refused.Take(5)));
+    }
+
     private bool Resolve(GameObjectRef target)
         => _objects[target.ObjectIndex] is { } found && found.GameObjectId == target.StableId;
 

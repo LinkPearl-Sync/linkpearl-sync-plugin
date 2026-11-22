@@ -300,6 +300,7 @@ public sealed class SyncEngine : IAsyncDisposable
             await GiveUpUnansweredNoticesAsync(ct).ConfigureAwait(false);
             await ServeReapplyAsync(ct).ConfigureAwait(false);
             await FollowReceiveChangesAsync(ct).ConfigureAwait(false);
+            await AnswerOwedManifestsAsync(ct).ConfigureAwait(false);
             await AdoptFinishedDialsAsync(ct).ConfigureAwait(false);
             await ExchangePoliciesAsync(ct).ConfigureAwait(false);
             await DropDeadSessionsAsync().ConfigureAwait(false);
@@ -476,10 +477,11 @@ public sealed class SyncEngine : IAsyncDisposable
 
     /// <summary>Redemande le manifeste d'un pair dont le réglage de réception a changé.</summary>
     /// <remarks>
-    /// Le manifeste revient filtré selon le nouveau réglage. S'il diffère de ce
-    /// qui est posé, il est reposé dès que ses blobs sont là, comme n'importe
-    /// quel changement d'apparence ; sinon rien ne bouge. Ce qui est posé reste
-    /// en place d'ici là : l'effacer ferait clignoter le pair pour rien.
+    /// Un blocage n'attend pas la réponse : le tic filtre déjà ce qui est posé
+    /// (voir <see cref="Enforce"/>). La redemande sert au déblocage : ce que le
+    /// filtre de réception avait écarté n'a jamais été téléchargé, et seul le
+    /// manifeste complet du pair permet de le demander. Il est reposé dès que
+    /// ses blobs sont là, comme n'importe quel changement d'apparence.
     /// </remarks>
     private async Task FollowReceiveChangesAsync(CancellationToken ct)
     {
@@ -503,6 +505,30 @@ public sealed class SyncEngine : IAsyncDisposable
             catch (Exception e)
             {
                 _log.Warning($"{runtime.Pair.LogTag} : redemande du manifeste en échec.", e);
+            }
+        }
+    }
+
+    /// <summary>Sert les demandes de manifeste que les sessions ont dû différer.</summary>
+    /// <remarks>
+    /// Une session ne répond qu'une fois par intervalle à la même demande, et
+    /// jamais par-dessus une file de contrôle pleine (voir PeerExchange). La
+    /// demande différée attend ici son heure, sur l'horloge du moteur.
+    /// </remarks>
+    private async Task AnswerOwedManifestsAsync(CancellationToken ct)
+    {
+        foreach (var runtime in _runtimes.Values)
+        {
+            if (runtime.Exchange is not { } exchange || runtime.Session is null)
+                continue;
+
+            try
+            {
+                await exchange.AnswerOwedAsync(ct).ConfigureAwait(false);
+            }
+            catch (Exception e)
+            {
+                _log.Warning($"{runtime.Pair.LogTag} : réponse différée en échec.", e);
             }
         }
     }
@@ -661,7 +687,7 @@ public sealed class SyncEngine : IAsyncDisposable
         var limiter = new RateLimiter(_clock, _settings.Limiter);
 
         var exchange = new PeerExchange(
-            session, _store, _local, limiter, _settings.DataChannels, _settings.BlockSize, _quotas, _log,
+            session, _store, _local, limiter, _settings.DataChannels, _settings.BlockSize, _quotas, _log, _clock,
             () => runtime.Receive, () => MayShareWith(runtime));
 
         runtime.Receive = EffectiveReceive(runtime);
@@ -1003,9 +1029,9 @@ public sealed class SyncEngine : IAsyncDisposable
 
             var inSight = matched.TryGetValue(id, out var target);
 
-            if (inSight && runtime.Exchange is { View: { Ready: true, Manifest: { } manifest } view })
+            if (inSight && runtime.Exchange is { View: { Ready: true, Manifest: { } received } view })
             {
-                var hash = view.ManifestHash ?? ManifestCodec.HashOf(manifest);
+                var (manifest, hash) = Enforce(runtime, view, received);
 
                 if (runtime.AppliedOn == target && runtime.AppliedManifest == hash)
                     continue;
@@ -1036,6 +1062,34 @@ public sealed class SyncEngine : IAsyncDisposable
                 runtime.Work = RemoveAsync(id, runtime);
             }
         }
+    }
+
+    /// <summary>
+    /// Le manifeste du pair, restreint à ce qu'on accepte de lui maintenant.
+    /// </summary>
+    /// <remarks>
+    /// Le manifeste est déjà filtré à la réception, mais selon le réglage de ce
+    /// moment-là. Resserré depuis, le réglage ne passait que par une nouvelle
+    /// réponse du pair : un pair qui ne répond plus gardait posé ce qu'on
+    /// bloque, et le reposait à chaque retour dans le champ. Filtré ici, le
+    /// manifeste change d'empreinte et le tic le repose sans les chemins
+    /// bloqués. Gardé par source et par réglage : le filtre et le hachage
+    /// réencodent le manifeste entier, ce qu'on ne refait pas à chaque tic.
+    /// </remarks>
+    private (CharacterManifest Manifest, BlobHash Hash) Enforce(Runtime runtime, PeerView view, CharacterManifest received)
+    {
+        var receive = EffectiveReceive(runtime);
+
+        if (runtime.Enforced is { } known && ReferenceEquals(known.Source, received) && known.Receive == receive)
+            return (known.Manifest, known.Hash);
+
+        var manifest = TransientPolicy.Filter(received, receive);
+        var hash = ReferenceEquals(manifest, received)
+            ? view.ManifestHash ?? ManifestCodec.HashOf(manifest)
+            : ManifestCodec.HashOf(manifest);
+
+        runtime.Enforced = new EnforcedManifest(received, receive, manifest, hash);
+        return (manifest, hash);
     }
 
     private async Task ApplyAsync(
@@ -1179,6 +1233,18 @@ public sealed class SyncEngine : IAsyncDisposable
         catch (Exception e)
         {
             _log.Warning($"{runtime.Pair.LogTag} : dialogue interrompu.", e);
+
+            // Plus personne ne lit cette session : ouverte, elle continuerait
+            // de déchiffrer et d'empiler ce que le pair envoie, dans une file
+            // sans borne. Fermée, le tic suivant la démonte et la rejoint.
+            try
+            {
+                await session.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception closing)
+            {
+                _log.Debug($"{runtime.Pair.LogTag} : fermeture après interruption en échec, {closing.Message}");
+            }
         }
     }
 
@@ -1305,6 +1371,10 @@ public sealed class SyncEngine : IAsyncDisposable
 
     private sealed record DialResult(PeerSession? Session, bool PeerWasAbsent, string? Failure);
 
+    /// <summary>Un manifeste reçu, filtré selon un réglage, et l'empreinte du résultat.</summary>
+    private sealed record EnforcedManifest(
+        CharacterManifest Source, TransientCategories Receive, CharacterManifest Manifest, BlobHash Hash);
+
     /// <summary>Ce que le moteur tient pour un pair, entre deux tics.</summary>
     private sealed class Runtime
     {
@@ -1370,6 +1440,9 @@ public sealed class SyncEngine : IAsyncDisposable
         /// arriver qu'après : la session lit donc la valeur à jour.
         /// </remarks>
         public TransientCategories Receive { get; set; } = TransientCategories.All;
+
+        /// <summary>Le dernier filtrage local du manifeste reçu, lu et écrit par le seul tic.</summary>
+        public EnforcedManifest? Enforced { get; set; }
 
         public bool Busy => Work is { IsCompleted: false };
 

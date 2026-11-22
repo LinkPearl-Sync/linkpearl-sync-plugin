@@ -201,7 +201,11 @@ Pendant les essais en jeu de la refonte, hors du plan :
   décalage chez nous jusqu'au rechargement de SimpleHeels.
 - **Le contrôle de squelette n'a aucun test automatique** : il passe par le
   chargeur Havok du jeu. À éprouver en jeu avec une animation d'un squelette
-  étendu.
+  étendu. Depuis l'audit de novembre 2026, il tourne aussi chez le receveur,
+  sur chaque `.pap` reçu, avant la pose : vérifier en jeu qu'une animation
+  ordinaire passe, qu'une animation d'un squelette personnalisé passe (le
+  contrôle s'efface quand l'apparence porte un `.sklb`), et ce que devient la
+  première pose quand Glamourer change la race du pair.
 - **Le rythme d'une milliseconde de LiteNetLib** reste à surveiller en jeu :
   rien n'a encore mesuré ce qu'il coûte au processeur.
 - **Un service tiers d'avant les trames de bannissement ne bannit personne** :

@@ -3,6 +3,7 @@ using Linkpearl.Core.Abstractions;
 using Linkpearl.Core.Crypto;
 using Linkpearl.Core.Groups;
 using Linkpearl.Core.Identity;
+using Linkpearl.Core.Safety;
 using Linkpearl.Core.Tests.Sync;
 using Xunit;
 
@@ -31,7 +32,7 @@ public sealed class AdmissionTests : IDisposable
 
     /// <summary>Un membre qui tient le groupe, et son hôte.</summary>
     private (AdmissionHost Host, GroupBook Book, CreatedGroup Created) Member(
-        string password = "lune", bool asOwner = false, Func<AdmissionRequest, PlayerFingerprint, bool>? refuses = null)
+        string password = "lune", bool asOwner = false, Func<AdmissionRequest, PlayerFingerprint, BanVerdict>? screen = null)
     {
         var created = GroupGovernance.Create("Compagnie", password, PolicyFixture.Service, OwnerPoint, _clock.UtcNow);
         var book = new GroupBook(_clock);
@@ -39,7 +40,7 @@ public sealed class AdmissionTests : IDisposable
 
         using var stranger = CryptoPrimitives.GenerateIdentity();
         var ours = asOwner ? OwnerPoint : CryptoPrimitives.ExportPublicPoint(stranger);
-        var host = new AdmissionHost(book, () => ours, _clock, refuses);
+        var host = new AdmissionHost(book, () => ours, _clock, screen);
         _disposables.Add(host);
         return (host, book, created);
     }
@@ -696,7 +697,7 @@ public sealed class AdmissionTests : IDisposable
     public void Un_candidat_liste_ne_recoit_aucune_reponse_en_mode_mot_de_passe()
     {
         var calls = 0;
-        var (host, _, created) = Member(refuses: (_, _) => { calls++; return true; });
+        var (host, _, created) = Member(screen: (_, _) => { calls++; return BanVerdict.Listed; });
         var request = Decode<AdmissionRequest>(Start(NewCandidate(), created, "lune"));
 
         Assert.Empty(host.OnRequest(request, Candidate));
@@ -707,7 +708,7 @@ public sealed class AdmissionTests : IDisposable
     public void Un_candidat_liste_n_est_pas_propose_aux_moderateurs()
     {
         // Sans mot de passe, le groupe valide chaque entrée.
-        var (host, _, created) = Member(password: "", asOwner: true, refuses: (_, _) => true);
+        var (host, _, created) = Member(password: "", asOwner: true, screen: (_, _) => BanVerdict.Listed);
         var request = Decode<AdmissionRequest>(Start(NewCandidate(), created, ""));
 
         host.OnRequest(request, Candidate);
@@ -721,7 +722,7 @@ public sealed class AdmissionTests : IDisposable
         // Il coûte une dérivation PBKDF2 : un redépôt de la même demande, chaque
         // minute, ne doit pas la refaire.
         var calls = 0;
-        var (host, _, created) = Member(refuses: (_, _) => { calls++; return false; });
+        var (host, _, created) = Member(screen: (_, _) => { calls++; return BanVerdict.Clear; });
         var request = Decode<AdmissionRequest>(Start(NewCandidate(), created, "lune"));
 
         host.OnRequest(request, Candidate);
@@ -739,14 +740,91 @@ public sealed class AdmissionTests : IDisposable
         // jeu gèlerait le temps de la dérivation.
         AdmissionHost? host = null;
         var readable = false;
-        (host, _, var created) = Member(refuses: (_, _) =>
+        (host, _, var created) = Member(screen: (_, _) =>
         {
             readable = Task.Run(() => host!.Pending).Wait(TimeSpan.FromSeconds(2));
-            return false;
+            return BanVerdict.Clear;
         });
 
         host.OnRequest(Decode<AdmissionRequest>(Start(NewCandidate(), created, "lune")), Candidate);
 
         Assert.True(readable, "Pending attendait le verrou pris pendant le filtre");
+    }
+
+    private static readonly BanParameters Cheap = new(1000);
+    private static readonly byte[] BanSalt = Enumerable.Repeat((byte)7, 32).ToArray();
+
+    /// <summary>
+    /// Un service publie une liste non vide, et vingt demandes forgées sous des
+    /// noms neufs ont déjà pris le budget de dérivations de la minute.
+    /// </summary>
+    private ServiceBanBook ExhaustedBans()
+    {
+        var bans = new ServiceBanBook(_clock);
+        bans.SetList(PolicyFixture.Service, new BanList(
+            BanSalt, Cheap, [new BanEntry(BanList.Derive("quelqu'un d'autre", 21, BanSalt, Cheap), "triche", 0)]));
+
+        for (var i = 0; i < ServiceBanBook.MaxOnDemandPerMinute; i++)
+        {
+            var forged = $"expéditeur forgé {i}";
+            bans.Screen(PlayerFingerprint.Of(forged, 21), (salt, parameters) => BanList.Derive(forged, 21, salt, parameters));
+        }
+
+        return bans;
+    }
+
+    /// <summary>Le filtre tel que le plugin le branche sur le livre des services.</summary>
+    private static Func<AdmissionRequest, PlayerFingerprint, BanVerdict> Screening(ServiceBanBook bans)
+        => (request, print) => bans.Screen(
+                print, (salt, parameters) => BanList.Derive(request.CharacterName, request.WorldId, salt, parameters))
+            .Verdict;
+
+    [Fact]
+    public void Un_verdict_en_attente_laisse_le_redepot_recevoir_son_defi()
+    {
+        // Le budget épuisé ne dit rien du candidat : sa demande est ignorée,
+        // pas jugée. Mémorisée comme une réponse, elle faisait ignorer chaque
+        // redépôt pendant quinze minutes, plus que la candidature n'en dure.
+        var bans = ExhaustedBans();
+        var (host, _, created) = Member(screen: Screening(bans));
+        var candidate = NewCandidate();
+
+        Assert.Empty(host.OnRequest(Decode<AdmissionRequest>(Start(candidate, created, "lune")), Candidate));
+
+        _clock.Advance(AdmissionCandidate.RedepositInterval);
+        var redeposit = Decode<AdmissionRequest>(candidate.DueRedeposit()!);
+
+        Assert.Single(host.OnRequest(redeposit, Candidate));
+    }
+
+    [Fact]
+    public void Un_verdict_en_attente_laisse_le_redepot_rejoindre_les_demandes()
+    {
+        var bans = ExhaustedBans();
+        var (host, _, created) = Member(password: "", asOwner: true, screen: Screening(bans));
+        var candidate = NewCandidate();
+
+        host.OnRequest(Decode<AdmissionRequest>(Start(candidate, created, "")), Candidate);
+        Assert.Empty(host.Pending);
+
+        _clock.Advance(AdmissionCandidate.RedepositInterval);
+        host.OnRequest(Decode<AdmissionRequest>(candidate.DueRedeposit()!), Candidate);
+
+        Assert.Single(host.Pending);
+    }
+
+    [Fact]
+    public void Un_candidat_liste_reste_ignore_a_chaque_redepot()
+    {
+        // Seul un verdict définitif se mémorise : le filtre n'est pas refait.
+        var calls = 0;
+        var (host, _, created) = Member(screen: (_, _) => { calls++; return BanVerdict.Listed; });
+        var candidate = NewCandidate();
+
+        host.OnRequest(Decode<AdmissionRequest>(Start(candidate, created, "lune")), Candidate);
+        _clock.Advance(AdmissionCandidate.RedepositInterval);
+
+        Assert.Empty(host.OnRequest(Decode<AdmissionRequest>(candidate.DueRedeposit()!), Candidate));
+        Assert.Equal(1, calls);
     }
 }
