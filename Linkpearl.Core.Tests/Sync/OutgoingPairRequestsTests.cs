@@ -51,6 +51,80 @@ public class OutgoingPairRequestsTests
     }
 
     [Fact]
+    public void Une_seconde_acceptation_sous_la_meme_cle_mais_un_autre_ephemere_annule()
+    {
+        // Le constat de l'audit : un tiers qui a lu la demande et connaît la
+        // clé publique de la cible répond le premier sous cette clé, avec son
+        // propre éphémère. Le secret de paire devenait le sien, et la vraie
+        // acceptation passait pour un écho.
+        var (requests, _, nonce) = Sent();
+        var target = SomeKey();
+
+        Assert.IsType<AcceptanceVerdict.Concluded>(
+            requests.Settle(Target, target, nonce, TheirEphemeral(), senderVisible: true));
+
+        Assert.Equal(target, Assert.IsType<AcceptanceVerdict.Conflict>(
+            requests.Settle(Target, target, nonce, TheirEphemeral(), senderVisible: true)).First);
+    }
+
+    [Fact]
+    public void Une_acceptation_qui_ne_porte_pas_l_ephemere_de_l_accuse_annule()
+    {
+        // La cible accuse réception d'elle-même, avec l'éphémère qu'elle
+        // gardera pour accepter. Un tiers qui a lu la demande ailleurs et
+        // répond le premier ne peut pas porter cet éphémère.
+        var (requests, _, nonce) = Sent();
+        var genuine = TheirEphemeral();
+
+        Assert.IsType<AcceptanceVerdict.Repeated>(requests.NoteReceipt(nonce, genuine));
+
+        var verdict = requests.Settle(Target, SomeKey(), nonce, TheirEphemeral(), senderVisible: true);
+
+        Assert.Null(Assert.IsType<AcceptanceVerdict.Conflict>(verdict).First);
+        Assert.IsType<AcceptanceVerdict.Repeated>(requests.Settle(Target, SomeKey(), nonce, genuine, senderVisible: true));
+    }
+
+    [Fact]
+    public void Un_accuse_qui_contredit_une_acceptation_deja_conclue_l_annule()
+    {
+        // L'intrus a répondu avant que l'accusé n'arrive : la cible, elle, n'a
+        // pas besoin d'accepter pour le démasquer.
+        var (requests, _, nonce) = Sent();
+        var intruder = SomeKey();
+
+        Assert.IsType<AcceptanceVerdict.Concluded>(requests.Settle(Target, intruder, nonce, TheirEphemeral(), senderVisible: true));
+
+        Assert.Equal(intruder, Assert.IsType<AcceptanceVerdict.Conflict>(requests.NoteReceipt(nonce, TheirEphemeral())).First);
+    }
+
+    [Fact]
+    public void L_acceptation_qui_porte_l_ephemere_de_l_accuse_conclut()
+    {
+        var (requests, _, nonce) = Sent();
+        var genuine = TheirEphemeral();
+
+        requests.NoteReceipt(nonce, genuine);
+
+        Assert.IsType<AcceptanceVerdict.Concluded>(requests.Settle(Target, SomeKey(), nonce, genuine, senderVisible: true));
+    }
+
+    [Fact]
+    public void Deux_accuses_differents_annulent_la_demande()
+    {
+        var (requests, _, nonce) = Sent();
+
+        requests.NoteReceipt(nonce, TheirEphemeral());
+
+        Assert.IsType<AcceptanceVerdict.Conflict>(requests.NoteReceipt(nonce, TheirEphemeral()));
+        Assert.IsType<AcceptanceVerdict.Repeated>(requests.Settle(Target, SomeKey(), nonce, TheirEphemeral(), senderVisible: true));
+    }
+
+    [Fact]
+    public void Un_accuse_sans_demande_est_inconnu()
+        => Assert.IsType<AcceptanceVerdict.Unknown>(
+            Sent().Requests.NoteReceipt(RandomNumberGenerator.GetBytes(PairRequestMessage.NonceLength), TheirEphemeral()));
+
+    [Fact]
     public void Un_expediteur_hors_de_vue_ne_conclut_pas_et_laisse_la_demande_ouverte()
     {
         var (requests, _, nonce) = Sent();
@@ -109,13 +183,16 @@ public class OutgoingPairRequestsTests
     [Fact]
     public void La_meme_cle_qui_repond_deux_fois_n_est_qu_un_echo()
     {
+        // Un écho, c'est la même trame reçue par un autre service : même clé,
+        // même éphémère. Un éphémère différent est un second répondant.
         var (requests, _, nonce) = Sent();
         var key = SomeKey();
+        var ephemeral = TheirEphemeral();
 
-        requests.Settle(Target, key, nonce, TheirEphemeral(), senderVisible: true);
+        requests.Settle(Target, key, nonce, ephemeral, senderVisible: true);
 
         Assert.IsType<AcceptanceVerdict.Repeated>(
-            requests.Settle(Target, key, nonce, TheirEphemeral(), senderVisible: true));
+            requests.Settle(Target, key, nonce, ephemeral, senderVisible: true));
     }
 
     [Fact]

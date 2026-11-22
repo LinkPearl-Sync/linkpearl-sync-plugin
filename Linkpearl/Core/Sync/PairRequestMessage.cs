@@ -32,6 +32,28 @@ public sealed record PairRequestMessage(
     private const byte KindAcceptV1 = 0x02;
     private const byte KindRequest = 0x03;
     private const byte KindAccept = 0x04;
+    // Hors de la plage des messages d'admission (0x05 à 0x09), qui partagent
+    // les mêmes boîtes : un accusé y passait pour une demande d'entrée.
+    public const byte KindReceipt = 0x30;
+
+    private const int ReceiptLength = 1 + NonceLength + CryptoPrimitives.CompressedPointLength;
+
+    /// <summary>
+    /// Un accusé de réception : la cible a reçu la demande, et voici l'éphémère
+    /// qu'elle gardera pour l'accepter.
+    /// </summary>
+    /// <remarks>
+    /// Envoyé sans clic, dès la réception, par la cible elle-même. Un tiers qui
+    /// a lu la demande sur un service où la cible n'écoute pas, et répond le
+    /// premier, ne peut pas porter cet éphémère : son acceptation contredit
+    /// l'accusé, et le demandeur annule, même si la cible n'accepte jamais.
+    /// Ni nom ni clé d'identité : l'accusé n'apprend rien de plus à celui qui
+    /// a écrit la demande, et ne fait pas de la réception un oracle de clés.
+    /// </remarks>
+    public bool IsReceipt { get; private init; }
+
+    public static PairRequestMessage Receipt(byte[] nonce, byte[] ephemeral)
+        => new(false, ephemeral, nonce, ephemeral, string.Empty, 0) { IsReceipt = true };
 
     private const int KeyOffset = 1;
     private const int NonceOffset = KeyOffset + CryptoPrimitives.CompressedPointLength;
@@ -41,6 +63,15 @@ public sealed record PairRequestMessage(
 
     public byte[] Encode()
     {
+        if (IsReceipt)
+        {
+            var receipt = new byte[ReceiptLength];
+            receipt[0] = KindReceipt;
+            PairingNonce.CopyTo(receipt.AsSpan(1));
+            CryptoPrimitives.Compress(Ephemeral).CopyTo(receipt.AsSpan(1 + NonceLength));
+            return receipt;
+        }
+
         var name = Encoding.UTF8.GetBytes(CharacterName);
 
         // Coupé sur une frontière de caractère : la lecture est en UTF-8
@@ -75,6 +106,28 @@ public sealed record PairRequestMessage(
         {
             rejection = "demande d'un client d'avant le 24 septembre 2026 : l'autre joueur doit mettre à jour";
             return false;
+        }
+
+        if (frame.Length > 0 && frame[0] == KindReceipt)
+        {
+            if (frame.Length != ReceiptLength)
+            {
+                rejection = "accusé de réception de longueur inattendue";
+                return false;
+            }
+
+            try
+            {
+                var receiptEphemeral = CryptoPrimitives.Decompress(frame.Slice(1 + NonceLength, CryptoPrimitives.CompressedPointLength));
+                message = Receipt(frame.Slice(1, NonceLength).ToArray(), receiptEphemeral);
+                rejection = null;
+                return true;
+            }
+            catch (CryptographicException e)
+            {
+                rejection = $"clé invalide : {e.Message}";
+                return false;
+            }
         }
 
         if (frame.Length < HeaderLength)

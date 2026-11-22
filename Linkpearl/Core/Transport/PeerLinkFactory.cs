@@ -43,6 +43,9 @@ public sealed class PeerLinkFactory : IDisposable
     /// <summary>Les tentatives sortantes en cours, par jeton.</summary>
     private readonly Dictionary<string, TaskCompletionSource<IPeerLink>> _pending = new(StringComparer.Ordinal);
 
+    /// <summary>Les adresses que compose chaque tentative en cours : les seules d'où elle accepte une demande.</summary>
+    private readonly Dictionary<string, HashSet<IPEndPoint>> _pendingFrom = new(StringComparer.Ordinal);
+
     /// <summary>Les jetons attendus sans tentative sortante, chacun pour une seule connexion.</summary>
     private readonly Dictionary<string, string> _passive = new(StringComparer.Ordinal);
 
@@ -57,6 +60,29 @@ public sealed class PeerLinkFactory : IDisposable
     /// clé aurait été épinglée sous l'empreinte de l'autre.
     /// </remarks>
     private readonly Dictionary<NetPeer, string> _tokens = [];
+
+    /// <summary>
+    /// Plafond d'un message reçu sur un lien direct.
+    /// </summary>
+    /// <remarks>
+    /// Le plus gros message légitime est un manifeste compressé, que le
+    /// receveur refuse au-delà d'un Mo (<see cref="Safety.Quotas.MaxManifestCompressedBytes"/>) ;
+    /// les blocs de fichiers font 16 Kio. Deux Mo laissent la marge. Sans ce
+    /// plafond, LiteNetLib acceptait 65 535 fragments par message et
+    /// préallouait leur suivi sur la foi du nombre annoncé par le pair, pour
+    /// des centaines de groupes à la fois : de quoi retenir des centaines de
+    /// Mo dans le processus du jeu. Le relais a sa propre borne, plus large
+    /// parce qu'il ne reconstitue qu'un message à la fois.
+    /// </remarks>
+    public const int MaxMessageLength = 2 * 1024 * 1024;
+
+    /// <summary>
+    /// Fragments qu'un message peut annoncer : le plafond, découpé au plus petit
+    /// MTU que LiteNetLib emploie.
+    /// </summary>
+    private static readonly ushort MaxFragments = (ushort)(
+        (MaxMessageLength + (NetConstants.InitialMtu - NetConstants.FragmentedHeaderTotalSize) - 1)
+        / (NetConstants.InitialMtu - NetConstants.FragmentedHeaderTotalSize));
 
     public PeerLinkFactory(int channels, ILogSink log)
     {
@@ -78,6 +104,10 @@ public sealed class PeerLinkFactory : IDisposable
             // Des paquets plus grands portent plus par fenêtre. Mesuré à 20 ms
             // de latence et huit canaux : 5,5 Mo/s sans, 7,7 Mo/s avec.
             MtuDiscovery = true,
+
+            // Un message annoncé plus long est jeté fragment par fragment, sans
+            // rien préallouer pour lui.
+            MaxFragmentsCount = MaxFragments,
         };
 
         _listener.ConnectionRequestEvent += OnConnectionRequest;
@@ -153,6 +183,8 @@ public sealed class PeerLinkFactory : IDisposable
                 _log.Debug("Tentative déjà en cours sous ce jeton.");
                 return null;
             }
+
+            _pendingFrom[token] = candidates.Select(Normalize).ToHashSet();
         }
 
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -234,7 +266,10 @@ public sealed class PeerLinkFactory : IDisposable
         lock (_gate)
         {
             if (_pending.GetValueOrDefault(token) == completion)
+            {
                 _pending.Remove(token);
+                _pendingFrom.Remove(token);
+            }
 
             _passive.Remove(token);
 
@@ -267,7 +302,7 @@ public sealed class PeerLinkFactory : IDisposable
     public async Task<IPEndPoint?> ReflectAsync(IPEndPoint rendezvous, TimeSpan timeout, CancellationToken ct)
     {
         var completion = new TaskCompletionSource<IPEndPoint>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _reflection = completion;
+        _reflection = (Normalize(rendezvous), completion);
 
         try
         {
@@ -295,12 +330,27 @@ public sealed class PeerLinkFactory : IDisposable
         }
     }
 
-    private TaskCompletionSource<IPEndPoint>? _reflection;
+    /// <summary>La réflexion en attente, et le rendez-vous interrogé, seul à pouvoir y répondre.</summary>
+    private (IPEndPoint From, TaskCompletionSource<IPEndPoint> Completion)? _reflection;
+
+    /// <summary>Une adresse comparable : IPv4 sans enveloppe IPv6, et un IPEndPoint simple.</summary>
+    /// <remarks>
+    /// LiteNetLib remet des NetPeer, dont l'égalité n'est pas celle d'une
+    /// adresse : comparés tels quels, ils ne se reconnaîtraient jamais.
+    /// </remarks>
+    private static IPEndPoint Normalize(IPEndPoint endpoint)
+        => new(endpoint.Address.IsIPv4MappedToIPv6 ? endpoint.Address.MapToIPv4() : endpoint.Address, endpoint.Port);
 
     private void OnUnconnected(IPEndPoint from, NetPacketReader reader, UnconnectedMessageType type)
     {
         var data = reader.GetRemainingBytes();
         reader.Recycle();
+
+        // Une réponse ne vaut que venue du rendez-vous interrogé : l'UDP ne
+        // prouve rien d'autre, et quiconque connaît notre socket pouvait
+        // sinon nous faire publier l'adresse de son choix comme candidate.
+        if (_reflection is not { } pending || Normalize(from).Equals(pending.From) is false)
+            return;
 
         if (data.Length < 4 || data[0] != RendezvousKind.Reflected)
             return;
@@ -314,7 +364,15 @@ public sealed class PeerLinkFactory : IDisposable
         {
             var address = new IPAddress(data.AsSpan(2, length));
             var port = BinaryPrimitives.ReadUInt16BigEndian(data.AsSpan(2 + length));
-            _reflection?.TrySetResult(new IPEndPoint(address, port));
+
+            // Un port nul ou une adresse qui ne mène nulle part ne se publie
+            // pas : le pair refuserait tout notre bloc de candidats.
+            if (port == 0 || IPAddress.IsLoopback(address) || address.Equals(IPAddress.Any)
+                || address.Equals(IPAddress.IPv6Any) || address.IsIPv6Multicast
+                || (address.AddressFamily is System.Net.Sockets.AddressFamily.InterNetwork && address.GetAddressBytes()[0] >= 224))
+                return;
+
+            pending.Completion.TrySetResult(new IPEndPoint(address, port));
         }
         catch (Exception e)
         {
@@ -346,6 +404,17 @@ public sealed class PeerLinkFactory : IDisposable
             var expected = _pending.TryGetValue(token, out var attempt) && attempt.Task.IsCompleted is false;
 
             if (expected is false && _passive.ContainsKey(token) is false)
+            {
+                request.Reject();
+                return;
+            }
+
+            // Le jeton passe en clair, et tout membre d'un groupe commun (ou
+            // n'importe qui, pour le Public) sait le dériver. Une tentative ne
+            // l'accepte donc que d'une adresse qu'elle compose elle-même, celles
+            // que le pair a annoncées : la première venue la servait, refusait
+            // ensuite le vrai pair, et la tentative échouait sans passer au relais.
+            if (_pendingFrom.TryGetValue(token, out var from) && from.Contains(Normalize(request.RemoteEndPoint)) is false)
             {
                 request.Reject();
                 return;
@@ -412,6 +481,17 @@ public sealed class PeerLinkFactory : IDisposable
 
     private void OnReceive(NetPeer peer, NetPacketReader reader, byte channel, DeliveryMethod method)
     {
+        // Un MTU plus grand que l'initial fait passer un peu plus que le
+        // plafond sous le même nombre de fragments : la borne se vérifie
+        // encore ici, avant la copie. Un message fiable jeté désordonnerait le
+        // canal, d'où la coupure.
+        if (reader.AvailableBytes > MaxMessageLength)
+        {
+            reader.Recycle();
+            peer.Disconnect();
+            return;
+        }
+
         if (_links.TryGetValue(peer, out var link))
             link.Deliver(channel, reader.GetRemainingBytes());
 

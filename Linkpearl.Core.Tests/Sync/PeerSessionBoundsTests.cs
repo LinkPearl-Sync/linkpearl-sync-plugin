@@ -4,6 +4,7 @@ using Linkpearl.Core.Crypto;
 using Linkpearl.Core.Identity;
 using Linkpearl.Core.Protocol;
 using Linkpearl.Core.Sync;
+using Linkpearl.Core.Tests.Transport;
 using Linkpearl.Core.Transport;
 using Linkpearl.Core.Transport.Rendezvous;
 using Xunit;
@@ -128,6 +129,35 @@ public sealed class PeerSessionBoundsTests : IDisposable
         Assert.NotNull(sessions[0]);
         Assert.NotNull(sessions[1]);
         return (sessions[0]!, sessions[1]!);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Un_handshake_bloque_a_l_envoi_echoue_a_l_echeance_et_ferme_le_lien(bool weInitiate)
+    {
+        // Un relais qui cesse de lire laisse l'envoi d'un message du handshake
+        // bloqué dans sa socket. Le délai de quinze secondes ne couvrait que
+        // les lectures : la session attendait sans fin, lien ouvert, pendant
+        // que le relais continuait d'envoyer ses sondes. Les sondes de huit
+        // octets passent encore, le message du handshake non.
+        var (initiator, responder) = Ordered();
+        var (us, them) = weInitiate ? (initiator, responder) : (responder, initiator);
+        var pipe = new StalledPipe(passesUpTo: 16);
+        var link = new RelayPeerLink(pipe, null);
+
+        var establishing = PeerSession.EstablishAsync(
+            link, Knowing(them), us.Id, us.Key, _clock, new SilentLog(), default,
+            handshakeDeadline: TimeSpan.FromMilliseconds(300));
+
+        if (weInitiate is false)
+        {
+            var message1 = new HandshakeInitiator(them.Key, _clock).CreateMessage1();
+            pipe.Feed([0x01, ChannelPlan.ControlChannel, .. message1]);
+        }
+
+        Assert.Null(await establishing.WaitAsync(Quickly));
+        Assert.False(link.IsOpen);
     }
 
     [Fact]

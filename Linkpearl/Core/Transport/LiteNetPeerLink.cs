@@ -42,6 +42,11 @@ public sealed class LiteNetPeerLink(NetPeer peer) : IPeerLink
         if (IsOpen is false)
             throw new InvalidOperationException("lien fermé");
 
+        // Le pair refuserait le message, et LiteNetLib lèverait de toute façon
+        // au découpage : autant le dire dans les mêmes termes que le relais.
+        if (payload.Length > PeerLinkFactory.MaxMessageLength)
+            throw new ArgumentException($"message de {payload.Length} octets, plafond {PeerLinkFactory.MaxMessageLength}", nameof(payload));
+
         peer.Send(payload.Span, channel, DeliveryMethod.ReliableOrdered);
         return ValueTask.CompletedTask;
     }

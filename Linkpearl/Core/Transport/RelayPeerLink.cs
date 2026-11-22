@@ -96,6 +96,19 @@ public sealed class RelayPeerLink : IPeerLink
     private const int NotAssembling = -1;
 
     private Action<byte, byte[]>? _received;
+
+    /// <summary>
+    /// Vrai tant qu'une réponse à une sonde attend son tour d'écriture.
+    /// </summary>
+    /// <remarks>
+    /// Une sonde arrive avant toute authentification, et chaque réponse attend
+    /// le verrou d'écriture. Si le relais cesse de lire, la réponse qui tient le
+    /// verrou ne rend jamais la main : sans ce drapeau, chaque sonde suivante en
+    /// garait une de plus, sans borne. Une sonde reçue pendant ce temps reste
+    /// sans réponse, ce qui ne fausse que la mesure de l'autre bout.
+    /// </remarks>
+    private int _echoPending;
+
     private int _started;
     private int _closed;
     private int _roundTripMs;
@@ -254,9 +267,12 @@ public sealed class RelayPeerLink : IPeerLink
                 if (body.Length != sizeof(long))
                     return "sonde malformée";
 
+                if (Interlocked.CompareExchange(ref _echoPending, 1, 0) != 0)
+                    return null;
+
                 var echo = (byte[])frame.Clone();
                 echo[0] = Pong;
-                _ = SendControlAsync(echo);
+                _ = EchoAsync(echo);
                 return null;
 
             case Pong:
@@ -369,6 +385,18 @@ public sealed class RelayPeerLink : IPeerLink
         }
         catch (OperationCanceledException)
         {
+        }
+    }
+
+    private async Task EchoAsync(byte[] echo)
+    {
+        try
+        {
+            await SendControlAsync(echo).ConfigureAwait(false);
+        }
+        finally
+        {
+            Volatile.Write(ref _echoPending, 0);
         }
     }
 

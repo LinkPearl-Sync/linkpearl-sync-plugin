@@ -271,7 +271,10 @@ public static class ManifestCodec
                 return false;
             }
 
+            // Le genre se vérifie avant la lecture numérique : sur une chaîne,
+            // TryGetUInt16 lève au lieu de rendre faux.
             if (root.TryGetProperty("v", out var versionElement) is false
+                || versionElement.ValueKind is not JsonValueKind.Number
                 || versionElement.TryGetUInt16(out var version) is false)
             {
                 rejection = "manifeste : version absente ou illisible";
@@ -307,6 +310,7 @@ public static class ManifestCodec
                 }
 
                 if (element.TryGetProperty("s", out var sizeElement) is false
+                    || sizeElement.ValueKind is not JsonValueKind.Number
                     || sizeElement.TryGetInt64(out var size) is false
                     || size < 0)
                 {
@@ -375,7 +379,10 @@ public static class ManifestCodec
             rejection = null;
             return true;
         }
-        catch (JsonException e)
+        // Les accesseurs de JsonElement lèvent ces deux-là sur un genre
+        // inattendu : l'entrée vient d'un pair, et toute défaillance de lecture
+        // devient un refus, jamais une exception qui arrêterait la pompe.
+        catch (Exception e) when (e is JsonException or InvalidOperationException or ArgumentException)
         {
             rejection = $"manifeste illisible : {e.Message}";
             return false;

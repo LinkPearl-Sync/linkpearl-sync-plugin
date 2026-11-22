@@ -51,6 +51,18 @@ public sealed class PeerSession : IAsyncDisposable
 
     private const int MaxEarlyBytes = 1024 * 1024;
 
+    /// <summary>
+    /// Le temps donné au handshake entier, envois compris.
+    /// </summary>
+    /// <remarks>
+    /// Trois messages, dont chaque lecture attend déjà au plus quinze secondes
+    /// (<see cref="NextRawAsync"/>). Les envois, eux, n'avaient aucune borne :
+    /// un envoi relayé n'écoute que le jeton de son lien, et derrière un relais
+    /// qui ne lit plus, il ne rendait jamais la main. Le lien restait alors
+    /// ouvert sans fin, avant toute authentification.
+    /// </remarks>
+    private static readonly TimeSpan HandshakeDeadline = TimeSpan.FromSeconds(45);
+
     private readonly IPeerLink _link;
     private readonly ILogSink _log;
     private readonly Channel<PeerMessage> _incoming = Channel.CreateUnbounded<PeerMessage>();
@@ -149,18 +161,31 @@ public sealed class PeerSession : IAsyncDisposable
     /// </remarks>
     public static async Task<PeerSession?> EstablishAsync(
         IPeerLink link, PairRecord pair, PeerId ourId, ECDsa identity, IClock clock, ILogSink log,
-        CancellationToken ct, IGroupGate? groups = null)
+        CancellationToken ct, IGroupGate? groups = null, TimeSpan? handshakeDeadline = null)
     {
         var weInitiate = WeInitiate(pair, ourId);
         var session = new PeerSession(link, pair, log, weInitiate) { State = PeerSessionState.Handshaking, _groups = groups };
 
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(handshakeDeadline ?? HandshakeDeadline);
+
         try
         {
-            var keys = weInitiate
-                ? await session.InitiateAsync(identity, pair, clock, ct).ConfigureAwait(false)
-                : await session.RespondAsync(identity, pair, clock, ct).ConfigureAwait(false);
+            SessionKeys? keys;
 
-            if (keys is null)
+            // À l'échéance, le lien est fermé et pas seulement le jeton annulé :
+            // c'est la seule chose qu'entend un envoi bloqué chez le relais.
+            // Hors du fil du minuteur, comme dans Drop : fermer un lien relayé
+            // attend sa socket.
+            await using (deadline.Token.Register(() => _ = Task.Run(async () => await link.DisposeAsync().ConfigureAwait(false))))
+            {
+                keys = weInitiate
+                    ? await session.InitiateAsync(identity, pair, clock, deadline.Token).ConfigureAwait(false)
+                    : await session.RespondAsync(identity, pair, clock, deadline.Token).ConfigureAwait(false);
+            }
+
+            // Échu juste après le dernier message : le lien se ferme déjà.
+            if (keys is null || deadline.IsCancellationRequested)
             {
                 await session.DisposeAsync().ConfigureAwait(false);
                 return null;

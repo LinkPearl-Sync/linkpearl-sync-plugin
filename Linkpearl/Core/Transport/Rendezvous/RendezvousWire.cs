@@ -93,6 +93,29 @@ public static class RendezvousKind
 
     /// <summary>Réponse : un bit par adresse, levé si la boîte est à nous, baissé si quelqu'un d'autre la tient.</summary>
     public const byte MailboxClaimed = 0x1E;
+
+    /// <summary>
+    /// Ouvre des boîtes partagées, celles d'admission, tenues ensemble par
+    /// tous les membres qui admettent.
+    /// </summary>
+    /// <remarks>
+    /// Un registre à part, que <see cref="MailboxClaim"/> ne touche jamais :
+    /// sur le même registre, quiconque connaissait le code d'un groupe
+    /// réclamait d'avance ses boîtes d'admission et en écartait les
+    /// modérateurs sans qu'ils le sachent. Réponse <see cref="MailboxClaimed"/> :
+    /// un bit par adresse, levé si la session tient désormais la boîte.
+    /// </remarks>
+    public const byte SharedMailboxOpen = 0x1F;
+
+    /// <summary>
+    /// Dépose dans une boîte partagée, et jamais dans une boîte ordinaire.
+    /// </summary>
+    /// <remarks>
+    /// Réponse <see cref="MailboxClaimed"/> à un seul bit, levé si au moins un
+    /// détenteur l'a reçu : le candidat sait alors s'il doit encore déposer
+    /// à l'ancienne, pour des membres d'avant ces boîtes.
+    /// </remarks>
+    public const byte SharedMailboxDeposit = 0x20;
 }
 
 /// <summary>Ce qu'un client annonce au rendez-vous.</summary>
@@ -297,6 +320,20 @@ public static class RendezvousWire
     {
         var frame = MailboxOpen(addresses);
         frame[0] = RendezvousKind.MailboxClaim;
+        return frame;
+    }
+
+    public static byte[] SharedMailboxOpen(IReadOnlyList<byte[]> addresses)
+    {
+        var frame = MailboxOpen(addresses);
+        frame[0] = RendezvousKind.SharedMailboxOpen;
+        return frame;
+    }
+
+    public static byte[] SharedMailboxDeposit(ReadOnlySpan<byte> address, ReadOnlySpan<byte> payload)
+    {
+        var frame = MailboxDeposit(address, payload);
+        frame[0] = RendezvousKind.SharedMailboxDeposit;
         return frame;
     }
 

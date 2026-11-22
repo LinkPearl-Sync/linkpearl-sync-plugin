@@ -44,12 +44,65 @@ public class MailboxClaimTests
     }
 
     [Fact]
+    public void Le_texte_d_erreur_d_un_service_est_borne_et_nettoye()
+    {
+        // Le constat de l'audit : un service pouvait répondre 65 535 octets de
+        // texte, gardés tels quels jusqu'à la barre d'état, où les abréger
+        // coûtait des secondes par image. Un texte venu du réseau n'arrive à
+        // l'interface que court et sans caractère de contrôle ni de format.
+        var flood = "ligne\nsuivante‮" + new string('A', 65_000);
+
+        var reason = Assert.IsType<MailboxClaimOutcome.Failed>(
+            RendezvousClient.ClaimOutcomeOf(RendezvousWire.Error(flood), 2)).Reason;
+
+        Assert.True(reason.Length <= RendezvousClient.MaxServiceText + 1);
+        Assert.DoesNotContain(reason, c => char.IsControl(c)
+            || System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c) is System.Globalization.UnicodeCategory.Format);
+    }
+
+    [Fact]
     public void Une_coupure_ou_une_reponse_etrangere_est_un_echec()
     {
         Assert.IsType<MailboxClaimOutcome.Failed>(RendezvousClient.ClaimOutcomeOf(null, 2));
         Assert.IsType<MailboxClaimOutcome.Failed>(RendezvousClient.ClaimOutcomeOf([RendezvousKind.Matched], 2));
         Assert.IsType<MailboxClaimOutcome.Failed>(RendezvousClient.ClaimOutcomeOf([RendezvousKind.MailboxClaimed], 2));
     }
+
+    [Fact]
+    public async Task L_ouverture_partagee_envoie_sa_trame_et_lit_les_places_obtenues()
+    {
+        using var service = new FakeService(_ => [RendezvousWire.MailboxClaimed([true, false])]);
+        await using var client = new RendezvousClient();
+        await client.ConnectAsync("127.0.0.1", service.Port, CancellationToken.None);
+
+        using var bounded = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var outcome = await client.OpenSharedMailboxesAsync([Address(1), Address(2)], bounded.Token);
+
+        Assert.Equal([true, false], Assert.IsType<MailboxClaimOutcome.Held>(outcome).Mine);
+        Assert.Equal(RendezvousKind.SharedMailboxOpen, (await service.FirstFrame)[0]);
+    }
+
+    [Fact]
+    public async Task Le_depot_partage_dit_si_quelqu_un_l_a_recu()
+    {
+        using var service = new FakeService(_ => [RendezvousWire.MailboxClaimed([false])]);
+        await using var client = new RendezvousClient();
+        await client.ConnectAsync("127.0.0.1", service.Port, CancellationToken.None);
+
+        using var bounded = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var outcome = await client.DepositSharedAsync(Address(3), new byte[] { 5 }, bounded.Token);
+
+        Assert.Equal([false], Assert.IsType<MailboxClaimOutcome.Held>(outcome).Mine);
+
+        var received = await service.FirstFrame;
+        Assert.Equal(RendezvousKind.SharedMailboxDeposit, received[0]);
+        Assert.Equal(Address(3), received[1..(1 + RendezvousWire.MailboxAddressSize)]);
+    }
+
+    [Fact]
+    public void Un_service_d_avant_ne_connait_pas_les_boites_partagees()
+        => Assert.IsType<MailboxClaimOutcome.NotSupported>(
+            RendezvousClient.ClaimOutcomeOf(RendezvousWire.Error(RendezvousClient.UnexpectedFrame), 1));
 
     [Fact]
     public async Task La_reclamation_envoie_la_bonne_trame_et_lit_la_reponse()

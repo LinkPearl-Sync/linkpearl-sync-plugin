@@ -33,6 +33,25 @@ public class PairRequestMessageTests
     }
 
     [Fact]
+    public void Un_accuse_de_reception_ne_porte_que_l_alea_et_l_ephemere()
+    {
+        // Envoyé sans clic, dès la réception : il ne dit ni nom ni clé
+        // d'identité, seulement l'éphémère qu'une acceptation devra porter.
+        using var ephemeral = CryptoPrimitives.GenerateEphemeral();
+        var nonce = System.Security.Cryptography.RandomNumberGenerator.GetBytes(PairRequestMessage.NonceLength);
+        var receipt = PairRequestMessage.Receipt(nonce, CryptoPrimitives.ExportPublicPoint(ephemeral));
+
+        var frame = receipt.Encode();
+
+        Assert.Equal(1 + PairRequestMessage.NonceLength + CryptoPrimitives.CompressedPointLength, frame.Length);
+        Assert.True(PairRequestMessage.TryDecode(frame, out var parsed, out var why), why);
+        Assert.True(parsed!.IsReceipt);
+        Assert.False(parsed.IsAccept);
+        Assert.Equal(nonce, parsed.PairingNonce);
+        Assert.Equal(CryptoPrimitives.ExportPublicPoint(ephemeral), parsed.Ephemeral);
+    }
+
+    [Fact]
     public void Une_acceptation_se_distingue_d_une_demande()
     {
         Assert.True(PairRequestMessage.TryDecode(Sample(accept: true).Encode(), out var parsed, out _));

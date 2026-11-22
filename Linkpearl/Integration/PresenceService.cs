@@ -32,6 +32,9 @@ public sealed record IncomingRequest(
 
     /// <summary>Un repère court pour le journal, qui ne nomme personne.</summary>
     public string Tag => PresenceService.Tag(Id);
+
+    /// <summary>Un accusé de réception d'une cible, et non une acceptation : il ne nomme personne.</summary>
+    public bool IsReceipt { get; init; }
 }
 
 /// <summary>
@@ -77,6 +80,20 @@ public sealed class PresenceService : IDisposable
     /// au-delà, c'est une rafale, pas des réponses.
     /// </summary>
     private const int MaxQueuedAcceptances = 32;
+
+    /// <summary>
+    /// Nos éphémères de pairage, tirés à la réception d'une demande et annoncés
+    /// par l'accusé, gardés pour l'acceptation. Par aléa, en hexadécimal.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, ECDiffieHellman> _receiptEphemerals = new(StringComparer.Ordinal);
+
+    /// <summary>Plafond des éphémères gardés : bien plus que les demandes que la boîte de réception retient.</summary>
+    private const int MaxReceiptEphemerals = 64;
+
+    /// <summary>Accusés envoyés dans la minute en cours : une demande forgée ne fait pas de nous un déposant infatigable.</summary>
+    private int _receiptsThisMinute;
+    private DateTimeOffset _receiptMinute;
+    private const int MaxReceiptsPerMinute = 20;
 
     private readonly ConcurrentDictionary<PlayerFingerprint, DateTimeOffset> _detected = new();
 
@@ -224,6 +241,9 @@ public sealed class PresenceService : IDisposable
         /// <summary>Jusqu'à quand on croit ce service d'avant la réclamation.</summary>
         public DateTimeOffset ClaimUnsupportedUntil { get; set; }
 
+        /// <summary>Jusqu'à quand on croit ce service d'avant les boîtes partagées.</summary>
+        public DateTimeOffset SharedUnsupportedUntil { get; set; }
+
         /// <summary>Nos propres boîtes qu'une autre connexion tient.</summary>
         public IReadOnlyList<byte[]> Contested { get; set; } = [];
 
@@ -352,6 +372,27 @@ public sealed class PresenceService : IDisposable
         _inbox.Clear();
         _outgoing.Clear();
         _accepted.Clear();
+
+        foreach (var key in _receiptEphemerals.Keys)
+        {
+            if (_receiptEphemerals.TryRemove(key, out var ephemeral))
+                ephemeral.Dispose();
+        }
+    }
+
+    /// <summary>Lâche tout ce qui appartient au personnage qui part : ses boîtes, puis ses demandes.</summary>
+    /// <remarks>
+    /// Oublier les demandes ne suffisait pas : les sessions qui tenaient sa
+    /// boîte personnelle restaient ouvertes jusqu'à la ronde qui rouvre pour le
+    /// suivant, et le service ne les ferme pas d'elles-mêmes. Une demande
+    /// déposée chez le précédent arrivait alors dans la boîte de réception du
+    /// suivant, et l'accepter révélait que les deux sont le même joueur. Les
+    /// boîtes se ferment donc avant que l'identité suivante ne soit liée.
+    /// </remarks>
+    public void Release()
+    {
+        CloseAll();
+        ForgetRequests();
     }
 
     /// <summary>Vrai si une demande à ce joueur attend encore sa réponse.</summary>
@@ -376,6 +417,12 @@ public sealed class PresenceService : IDisposable
 
         while (_accepted.TryDequeue(out var request))
         {
+            if (request.IsReceipt)
+            {
+                settled.Add((request, _outgoing.NoteReceipt(request.PairingNonce, request.Ephemeral)));
+                continue;
+            }
+
             var verdict = _outgoing.Settle(
                 request.Sender, request.Id, request.PairingNonce, request.Ephemeral, visible(request.Sender));
 
@@ -550,7 +597,7 @@ public sealed class PresenceService : IDisposable
         if (again is null || code is not { } ticket || service is not { } at)
             return;
 
-        var (delivered, _) = await DepositOnAsync(
+        var (delivered, _) = await DepositAdmissionAsync(
             [at], GroupDerivation.AdmissionAddress(ticket.ToBytes(), _clock.UtcNow).ToBytes(), again, ct)
             .ConfigureAwait(false);
 
@@ -690,6 +737,38 @@ public sealed class PresenceService : IDisposable
             var exclusive = false;
             IReadOnlyList<byte[]> contested = [];
 
+            // Les boîtes d'admission aussi au registre partagé, que nulle
+            // réclamation n'atteint : sur le seul registre ordinaire, un
+            // porteur du code les réclamait d'avance et en écartait les
+            // modérateurs sans qu'ils le sachent. L'ouverture ordinaire,
+            // plus bas, reste pour les candidats d'avant ces boîtes.
+            if (plan.Shared.Count > 0 && _clock.UtcNow >= session.SharedUnsupportedUntil)
+            {
+                switch (await BitsWithinAsync(token => client.OpenSharedMailboxesAsync(plan.Shared, token), ct)
+                            .ConfigureAwait(false))
+                {
+                    case MailboxClaimOutcome.Held held:
+                        WarnUnheldShared(session, held.Mine);
+                        break;
+
+                    // Un service d'avant coupe après ce refus : on repart
+                    // d'une connexion neuve, et on le retient quelques heures.
+                    case MailboxClaimOutcome.NotSupported:
+                        await client.DisposeAsync().ConfigureAwait(false);
+                        client = null;
+
+                        lock (_gate)
+                            session.SharedUnsupportedUntil = _clock.UtcNow + ClaimUnsupportedFor;
+
+                        _log.Information($"{session.At} ne connaît pas les boîtes partagées : admission à l'ancienne.");
+                        client = await ConnectAsync(session, ct).ConfigureAwait(false);
+                        break;
+
+                    case MailboxClaimOutcome.Failed failed:
+                        throw new InvalidOperationException($"ouverture partagée refusée : {failed.Reason}");
+                }
+            }
+
             if (plan.Own.Count > 0 && _clock.UtcNow >= session.ClaimUnsupportedUntil)
             {
                 switch (await ClaimAsync(client, plan.Own, ct).ConfigureAwait(false))
@@ -804,6 +883,36 @@ public sealed class PresenceService : IDisposable
     /// Le même que l'interrogation de présence, pour la même raison : une
     /// réponse perdue bloquerait toute la boucle de rafraîchissement.
     /// </remarks>
+    /// <summary>Une question à bits sous dix secondes, comme la réclamation.</summary>
+    private static async Task<MailboxClaimOutcome> BitsWithinAsync(
+        Func<CancellationToken, Task<MailboxClaimOutcome>> ask, CancellationToken ct)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(TimeSpan.FromSeconds(10));
+
+        try
+        {
+            return await ask(deadline.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested is false)
+        {
+            return new MailboxClaimOutcome.Failed("le service ne répond pas");
+        }
+    }
+
+    /// <summary>Une boîte d'admission sans place : d'autres réseaux tiennent toutes les places.</summary>
+    /// <remarks>
+    /// Le service borne les détenteurs d'une boîte partagée par réseau, pas
+    /// par groupe : une boîte pleine dit qu'une foule de réseaux l'écoute, ce
+    /// que nul groupe honnête ne fait. On le note, et l'ouverture ordinaire
+    /// reste là pour les candidats qui déposent à l'ancienne.
+    /// </remarks>
+    private void WarnUnheldShared(Session session, IReadOnlyList<bool> mine)
+    {
+        if (mine.Contains(false))
+            _log.Warning($"{session.At} : {mine.Count(held => held is false)} boîte(s) d'admission sans place libre.");
+    }
+
     private static async Task<MailboxClaimOutcome> ClaimAsync(
         RendezvousClient client, IReadOnlyList<byte[]> addresses, CancellationToken ct)
     {
@@ -961,6 +1070,23 @@ public sealed class PresenceService : IDisposable
             else
             {
                 await client.OpenMailboxesAsync([.. plan.Own, .. plan.Shared], ct).ConfigureAwait(false);
+            }
+
+            if (plan.Shared.Count > 0 && _clock.UtcNow >= session.SharedUnsupportedUntil)
+            {
+                switch (await BitsWithinAsync(token => client.OpenSharedMailboxesAsync(plan.Shared, token), ct)
+                            .ConfigureAwait(false))
+                {
+                    case MailboxClaimOutcome.Held held:
+                        WarnUnheldShared(session, held.Mine);
+                        break;
+
+                    case MailboxClaimOutcome.Failed failed:
+                        throw new InvalidOperationException($"ouverture partagée refusée : {failed.Reason}");
+
+                    default:
+                        throw new InvalidOperationException("le service ne connaît plus les boîtes partagées");
+                }
             }
 
             lock (_gate)
@@ -1267,6 +1393,63 @@ public sealed class PresenceService : IDisposable
         return (delivered, delivered > 0 ? null : failure);
     }
 
+    /// <summary>
+    /// Dépose une candidature dans la boîte d'admission d'un groupe.
+    /// </summary>
+    /// <remarks>
+    /// Au registre partagé d'abord : là, nulle réclamation d'un porteur du
+    /// code ne peut avoir écarté les modérateurs. À l'ancienne seulement si
+    /// personne n'y écoute, pour des membres d'avant ces boîtes, ou si le
+    /// service ne les connaît pas.
+    /// </remarks>
+    private async Task<(int Delivered, string? Failure)> DepositAdmissionAsync(
+        IReadOnlyList<RendezvousAddress> via, byte[] address, byte[] payload, CancellationToken ct)
+    {
+        List<RendezvousAddress> legacy = [];
+        var delivered = 0;
+        string? failure = null;
+
+        foreach (var session in Snapshot())
+        {
+            if (session.Client is not { } client || via.Contains(session.At) is false)
+                continue;
+
+            if (_clock.UtcNow < session.SharedUnsupportedUntil || payload.Length > RendezvousWire.MaxDepositLength)
+            {
+                legacy.Add(session.At);
+                continue;
+            }
+
+            switch (await BitsWithinAsync(token => client.DepositSharedAsync(address, payload, token), ct).ConfigureAwait(false))
+            {
+                case MailboxClaimOutcome.Held { Mine: [true] }:
+                    delivered++;
+                    break;
+
+                // Un service d'avant coupe après ce refus : la connexion se
+                // rouvre à la ronde suivante, et le redépôt de chaque minute
+                // passera alors à l'ancienne.
+                case MailboxClaimOutcome.NotSupported:
+                    lock (_gate)
+                        session.SharedUnsupportedUntil = _clock.UtcNow + ClaimUnsupportedFor;
+
+                    Close(session);
+                    failure = "service d'avant les boîtes partagées : nouvel essai à la prochaine ronde";
+                    break;
+
+                default:
+                    legacy.Add(session.At);
+                    break;
+            }
+        }
+
+        if (legacy.Count == 0)
+            return (delivered, delivered > 0 ? null : failure ?? "aucun service du groupe n'est disponible");
+
+        var (old, oldFailure) = await DepositOnAsync(legacy, address, payload, ct).ConfigureAwait(false);
+        return (delivered + old, delivered + old > 0 ? null : failure ?? oldFailure);
+    }
+
     /// <summary>Dépose la réponse d'un membre dans la boîte personnelle du candidat.</summary>
     /// <remarks>Utilisé par l'interface pour Accepter et Refuser, et par le fil d'écoute pour les défis.</remarks>
     public async Task<string> AnswerAsync(AdmissionOutbound outbound, CancellationToken ct)
@@ -1302,7 +1485,7 @@ public sealed class PresenceService : IDisposable
         // ajoute maintenant que la candidature attend.
         await EnsureOpenAsync(self.Fingerprint, ct).ConfigureAwait(false);
 
-        var (delivered, failure) = await DepositOnAsync(
+        var (delivered, failure) = await DepositAdmissionAsync(
             [service], GroupDerivation.AdmissionAddress(code.ToBytes(), _clock.UtcNow).ToBytes(), request, ct)
             .ConfigureAwait(false);
 
@@ -1332,7 +1515,11 @@ public sealed class PresenceService : IDisposable
         if (_identity() is not { } identity)
             return (NoCharacter, null);
 
-        using var ephemeral = CryptoPrimitives.GenerateEphemeral();
+        // L'éphémère annoncé par notre accusé, si nous l'avons envoyé : une
+        // acceptation qui en porterait un autre serait annulée par le demandeur.
+        using var ephemeral = _receiptEphemerals.TryRemove(Convert.ToHexStringLower(request.PairingNonce), out var announced)
+            ? announced
+            : CryptoPrimitives.GenerateEphemeral();
         var agreed = request with
         {
             PairingMaterial = PairRequestMessage.AgreeOnPairing(ephemeral, request.Ephemeral, request.PairingNonce),
@@ -1375,8 +1562,8 @@ public sealed class PresenceService : IDisposable
         {
             switch (payload)
             {
-                // Les types de PairRequestMessage, versions 1 et 2.
-                case [>= 0x01 and <= 0x04, ..]:
+                // Les types de PairRequestMessage, versions 1 et 2, et l'accusé de réception.
+                case [>= 0x01 and <= 0x04, ..] or [PairRequestMessage.KindReceipt, ..]:
                     OnPairMessage(payload);
                     break;
 
@@ -1454,7 +1641,7 @@ public sealed class PresenceService : IDisposable
             return;
 
         var address = GroupDerivation.AdmissionAddress(ticket.ToBytes(), _clock.UtcNow).ToBytes();
-        Detach(() => DepositOnAsync([at], address, proof, CancellationToken.None), "Envoi de la demande d'entrée");
+        Detach(() => DepositAdmissionAsync([at], address, proof, CancellationToken.None), "Envoi de la demande d'entrée");
     }
 
     /// <summary>Dépose les réponses de l'hôte, hors du fil d'écoute, dans la limite du plafond.</summary>
@@ -1529,6 +1716,24 @@ public sealed class PresenceService : IDisposable
         if (id == identity.Id)
             return;   // notre propre écho, sans intérêt
 
+        // L'accusé d'une cible : il n'entre dans la file que s'il porte l'aléa
+        // d'une de nos demandes, et la boucle du plugin le confronte à ce qui
+        // a déjà été répondu.
+        if (message.IsReceipt)
+        {
+            if (_outgoing.ConcernsNonce(message.PairingNonce) is false
+                || _inbox.Witness(id, message.PairingNonce, message.Ephemeral) is false
+                || _accepted.Count >= MaxQueuedAcceptances)
+                return;
+
+            _accepted.Enqueue(new IncomingRequest(
+                id, message.PublicKey, message.PairingNonce, string.Empty, 0, _clock.UtcNow, message.Ephemeral)
+            {
+                IsReceipt = true,
+            });
+            return;
+        }
+
         var request = new IncomingRequest(
             id, message.PublicKey, message.PairingNonce, message.CharacterName, message.WorldId, _clock.UtcNow,
             message.Ephemeral);
@@ -1550,7 +1755,7 @@ public sealed class PresenceService : IDisposable
                 return;
             }
 
-            if (_inbox.Witness(id, message.PairingNonce) is false)
+            if (_inbox.Witness(id, message.PairingNonce, message.Ephemeral) is false)
                 return;
 
             if (_accepted.Count >= MaxQueuedAcceptances)
@@ -1566,7 +1771,7 @@ public sealed class PresenceService : IDisposable
         // Un expéditeur qui dépose sur plusieurs services ne doit produire
         // qu'une seule invite : la même demande nous arrive alors par autant de
         // chemins que nous partageons de services avec lui.
-        if (_inbox.Witness(id, message.PairingNonce) is false)
+        if (_inbox.Witness(id, message.PairingNonce, message.Ephemeral) is false)
             return;
 
         // Bloqué au carnet : on l'a écarté, il n'a plus à nous solliciter.
@@ -1601,6 +1806,49 @@ public sealed class PresenceService : IDisposable
                 _log.Information($"Demande de pairage reçue ({request.Tag}).");
                 break;
         }
+
+        SendReceipt(request);
+    }
+
+    /// <summary>
+    /// Accuse réception d'une demande, sans attendre le clic, avec l'éphémère
+    /// que gardera l'acceptation.
+    /// </summary>
+    /// <remarks>
+    /// Le demandeur dépose sur tous ses services, et un tiers qui réclame
+    /// notre boîte sur un service où nous n'écoutons pas y lit la demande sans
+    /// que nous le sachions. S'il répond le premier, l'accusé, qui part de nos
+    /// propres services, le contredit : le demandeur annule, que nous
+    /// acceptions ensuite ou jamais.
+    /// </remarks>
+    private void SendReceipt(IncomingRequest request)
+    {
+        var key = Convert.ToHexStringLower(request.PairingNonce);
+
+        lock (_gate)
+        {
+            if (_clock.UtcNow - _receiptMinute >= TimeSpan.FromMinutes(1))
+                (_receiptMinute, _receiptsThisMinute) = (_clock.UtcNow, 0);
+
+            if (_receiptsThisMinute >= MaxReceiptsPerMinute
+                || _receiptEphemerals.ContainsKey(key) || _receiptEphemerals.Count >= MaxReceiptEphemerals)
+                return;
+
+            _receiptsThisMinute++;
+        }
+
+        var ephemeral = CryptoPrimitives.GenerateEphemeral();
+
+        if (_receiptEphemerals.TryAdd(key, ephemeral) is false)
+        {
+            ephemeral.Dispose();
+            return;
+        }
+
+        var receipt = PairRequestMessage.Receipt(request.PairingNonce, CryptoPrimitives.ExportPublicPoint(ephemeral)).Encode();
+        var address = MailboxAddress.Of(request.Sender, _clock.UtcNow).ToBytes();
+
+        Detach(() => DepositEverywhereAsync(address, receipt, CancellationToken.None), "Accusé de réception de pairage");
     }
 
     private async Task ListenAsync(Session session, RendezvousClient client, CancellationToken ct)

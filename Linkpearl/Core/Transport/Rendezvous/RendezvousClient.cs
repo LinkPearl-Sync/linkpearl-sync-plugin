@@ -91,7 +91,7 @@ public sealed class RendezvousClient : IAsyncDisposable
 
                 case RendezvousKind.Error:
                     throw new InvalidOperationException(
-                        $"rendez-vous : {System.Text.Encoding.UTF8.GetString(frame, 1, frame.Length - 1)}");
+                        $"rendez-vous : {ServiceText(frame.AsSpan(1))}");
             }
         }
     }
@@ -119,12 +119,31 @@ public sealed class RendezvousClient : IAsyncDisposable
     /// Les deux mêmes chemins que <see cref="QueryPresenceAsync"/>, pour la
     /// même raison : jamais deux lecteurs sur un flux.
     /// </remarks>
-    public async Task<MailboxClaimOutcome> ClaimMailboxesAsync(IReadOnlyList<byte[]> addresses, CancellationToken ct)
+    public Task<MailboxClaimOutcome> ClaimMailboxesAsync(IReadOnlyList<byte[]> addresses, CancellationToken ct)
+        => BitsAsync(RendezvousWire.MailboxClaim(addresses), addresses.Count, ct);
+
+    /// <summary>
+    /// Ouvre des boîtes partagées, celles d'admission, et dit lesquelles sont tenues.
+    /// </summary>
+    /// <remarks>
+    /// Un service d'avant ne les connaît pas : <see cref="MailboxClaimOutcome.NotSupported"/>,
+    /// et il coupe la connexion, comme pour la réclamation.
+    /// </remarks>
+    public Task<MailboxClaimOutcome> OpenSharedMailboxesAsync(IReadOnlyList<byte[]> addresses, CancellationToken ct)
+        => BitsAsync(RendezvousWire.SharedMailboxOpen(addresses), addresses.Count, ct);
+
+    /// <summary>Dépose dans une boîte partagée : un bit, levé si au moins un détenteur l'a reçu.</summary>
+    public Task<MailboxClaimOutcome> DepositSharedAsync(
+        ReadOnlyMemory<byte> address, ReadOnlyMemory<byte> payload, CancellationToken ct)
+        => BitsAsync(RendezvousWire.SharedMailboxDeposit(address.Span, payload.Span), 1, ct);
+
+    /// <summary>Envoie une trame qui appelle une réponse à bits, et la lit.</summary>
+    private async Task<MailboxClaimOutcome> BitsAsync(byte[] request, int asked, CancellationToken ct)
     {
         if (_listening)
-            return await ClaimThroughListenerAsync(addresses, ct).ConfigureAwait(false);
+            return await ClaimThroughListenerAsync(request, asked, ct).ConfigureAwait(false);
 
-        await SendAsync(RendezvousWire.MailboxClaim(addresses), ct).ConfigureAwait(false);
+        await SendAsync(request, ct).ConfigureAwait(false);
 
         while (true)
         {
@@ -138,12 +157,12 @@ public sealed class RendezvousClient : IAsyncDisposable
                 continue;
             }
 
-            return ClaimOutcomeOf(frame, addresses.Count);
+            return ClaimOutcomeOf(frame, asked);
         }
     }
 
     /// <summary>La réclamation qui laisse l'écouteur lire pour elle.</summary>
-    private async Task<MailboxClaimOutcome> ClaimThroughListenerAsync(IReadOnlyList<byte[]> addresses, CancellationToken ct)
+    private async Task<MailboxClaimOutcome> ClaimThroughListenerAsync(byte[] request, int asked, CancellationToken ct)
     {
         var waiter = new TaskCompletionSource<byte[]?>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -151,15 +170,51 @@ public sealed class RendezvousClient : IAsyncDisposable
         // précédente, si elle attend encore, n'aura jamais sa réponse.
         Interlocked.Exchange(ref _claimWaiter, waiter)?.TrySetResult(null);
 
-        await SendAsync(RendezvousWire.MailboxClaim(addresses), ct).ConfigureAwait(false);
+        await SendAsync(request, ct).ConfigureAwait(false);
 
         await using var give = ct.Register(() => waiter.TrySetResult(null)).ConfigureAwait(false);
 
-        return ClaimOutcomeOf(await waiter.Task.ConfigureAwait(false), addresses.Count);
+        return ClaimOutcomeOf(await waiter.Task.ConfigureAwait(false), asked);
     }
 
     /// <summary>Le texte qu'un service renvoie à une trame qu'il ne connaît pas, avant de couper.</summary>
     public const string UnexpectedFrame = "trame inattendue";
+
+    /// <summary>Longueur au-delà de laquelle un texte d'erreur venu d'un service est abrégé.</summary>
+    public const int MaxServiceText = 160;
+
+    /// <summary>
+    /// Le texte d'une erreur de service, tel qu'il peut atteindre un journal ou l'interface.
+    /// </summary>
+    /// <remarks>
+    /// Rien ne borne ce texte en amont qu'une trame de 64 Kio, et le service
+    /// n'est pas authentifié. Gardé tel quel, il remplissait la barre d'état
+    /// de 65 535 caractères que l'abrègement remesurait un à un à chaque image,
+    /// assez pour figer le jeu. Abrégé et sans caractère de contrôle ni de
+    /// format, il ne peut plus ni peser ni retourner l'affichage.
+    /// </remarks>
+    public static string ServiceText(ReadOnlySpan<byte> reason)
+    {
+        var raw = System.Text.Encoding.UTF8.GetString(reason[..Math.Min(reason.Length, MaxServiceText * 4)]);
+        var builder = new System.Text.StringBuilder(Math.Min(raw.Length, MaxServiceText + 1));
+
+        foreach (var c in raw)
+        {
+            if (builder.Length == MaxServiceText)
+            {
+                builder.Append('…');
+                break;
+            }
+
+            if (char.IsControl(c)
+                || System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c) is System.Globalization.UnicodeCategory.Format)
+                continue;
+
+            builder.Append(c);
+        }
+
+        return builder.ToString();
+    }
 
     /// <summary>Ce que dit la réponse du service à une réclamation de <paramref name="asked"/> adresses.</summary>
     /// <remarks>
@@ -193,7 +248,7 @@ public sealed class RendezvousClient : IAsyncDisposable
 
                 return text == UnexpectedFrame
                     ? new MailboxClaimOutcome.NotSupported()
-                    : new MailboxClaimOutcome.Failed(text);
+                    : new MailboxClaimOutcome.Failed(ServiceText(reason));
 
             default:
                 return new MailboxClaimOutcome.Failed("réponse inattendue du service");
@@ -318,7 +373,7 @@ public sealed class RendezvousClient : IAsyncDisposable
                 return (null, "connexion fermée par le service");
 
             if (frame[0] == RendezvousKind.Error)
-                return (null, System.Text.Encoding.UTF8.GetString(frame.AsSpan(1)));
+                return (null, ServiceText(frame.AsSpan(1)));
 
             if (RendezvousWire.TryReadBanListData(frame, out var index, out var count, out var json, out var why) is false)
                 return (null, why);
@@ -367,7 +422,7 @@ public sealed class RendezvousClient : IAsyncDisposable
                 return (null, "connexion fermée par le service");
 
             if (frame[0] == RendezvousKind.Error)
-                return (null, System.Text.Encoding.UTF8.GetString(frame.AsSpan(1)));
+                return (null, ServiceText(frame.AsSpan(1)));
 
             var read = v2
                 ? RendezvousWire.TryReadConsensusV2Page(frame, out var index, out var count, out var chunk, out var why)
@@ -486,7 +541,7 @@ public sealed class RendezvousClient : IAsyncDisposable
         {
             null => "le service n'a pas répondu",
             [RendezvousKind.TicketAccepted, ..] => null,
-            [RendezvousKind.Error, .. var reason] => System.Text.Encoding.UTF8.GetString(reason),
+            [RendezvousKind.Error, .. var reason] => ServiceText(reason),
             _ => "réponse inattendue du service",
         };
     }
@@ -503,7 +558,7 @@ public sealed class RendezvousClient : IAsyncDisposable
         {
             null => (null, "le service n'a pas répondu"),
             [RendezvousKind.TicketPayload, .. var payload] => (payload, null),
-            [RendezvousKind.Error, .. var reason] => (null, System.Text.Encoding.UTF8.GetString(reason)),
+            [RendezvousKind.Error, .. var reason] => (null, ServiceText(reason)),
             _ => (null, "réponse inattendue du service"),
         };
     }

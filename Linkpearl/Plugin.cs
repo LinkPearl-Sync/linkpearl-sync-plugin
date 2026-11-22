@@ -256,11 +256,13 @@ public sealed class Plugin : IDalamudPlugin
 
         // Un candidat listé par un service actif n'est pas admis. La dérivation
         // se fait à la demande, dans le budget du livre : voir ServiceBanBook.
+        // Le verdict passe entier : hors budget, il reste en attente, et l'hôte
+        // laisse le redépôt suivant être filtré au lieu de l'ignorer.
         _admissionHost = new AdmissionHost(
             _groups, () => _pairing.Identity?.PublicKey, clock,
-            refuses: (request, print) => _serviceBans.Screen(
+            screen: (request, print) => _serviceBans.Screen(
                     print, (salt, parameters) => BanList.Derive(request.CharacterName, request.WorldId, salt, parameters))
-                .Verdict is not BanVerdict.Clear,
+                .Verdict,
             ourFingerprint: () => _state.Self?.Fingerprint);
         _candidate = new AdmissionCandidate(clock);
         _presence.Attach(_admissionHost, _candidate);
@@ -734,7 +736,9 @@ public sealed class Plugin : IDalamudPlugin
         _groups.Clear();
         _presence.SetGroups([]);
 
-        _presence.ForgetRequests();
+        // Ses boîtes avec ses demandes : une session restée ouverte pour lui
+        // livrerait au suivant ce qu'on lui a adressé.
+        _presence.Release();
 
         // Une candidature ou une admission du personnage précédent qui
         // aboutirait maintenant rangerait le secret obtenu par l'un dans le
@@ -1401,12 +1405,17 @@ public sealed class Plugin : IDalamudPlugin
                 // Deux clés ont répondu au même aléa : l'une des deux a lu
                 // notre demande dans une boîte qui n'était pas la sienne, et
                 // rien ne dit laquelle. Le pair de la première est retiré.
+                // L'accusé de réception de la cible peut aussi la démasquer,
+                // avant ou après la conclusion : rien n'était peut-être encore
+                // au carnet, et l'accusé ne nomme personne.
                 case AcceptanceVerdict.Conflict conflict:
-                    _pairing.Remove(conflict.First);
+                    if (conflict.First is { } first)
+                        _pairing.Remove(first);
+
                     Log.Warning(
-                        $"Deux réponses différentes à la même demande de pairage ({PresenceService.Tag(conflict.First)}, "
+                        $"Deux réponses différentes à la même demande de pairage ({(conflict.First is { } tagged ? PresenceService.Tag(tagged) : "rien de conclu")}, "
                       + $"puis {accepted.Tag}) : pairage annulé par prudence.");
-                    Report($"Deux réponses différentes sont arrivées à votre demande de pairage à {name}. "
+                    Report($"Deux réponses différentes sont arrivées à votre demande de pairage{(accepted.IsReceipt ? "" : $" à {name}")}. "
                          + "Pairage annulé par prudence : quelqu'un a peut-être répondu à sa place. "
                          + "Redemander en face à face.");
                     break;

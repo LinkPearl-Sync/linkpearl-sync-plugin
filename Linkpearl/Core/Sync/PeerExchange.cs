@@ -45,6 +45,7 @@ public sealed class PeerExchange : IAsyncDisposable
     private readonly int _blockSize;
     private readonly Func<TransientCategories> _receive;
     private readonly Func<bool> _mayShare;
+    private readonly IClock _clock;
 
     /// <summary>
     /// Paquets qu'on laisse s'accumuler dans la file d'un canal avant d'attendre.
@@ -55,7 +56,39 @@ public sealed class PeerExchange : IAsyncDisposable
     /// aller plus vite, la fenêtre ne s'ouvrant pas davantage, et coûte
     /// directement en mémoire dans le processus du jeu.
     /// </remarks>
-    private const int QueuedPacketsPerChannel = 64;
+    internal const int QueuedPacketsPerChannel = 64;
+
+    /// <summary>
+    /// Délai minimal entre deux envois d'un même manifeste à ce pair.
+    /// </summary>
+    /// <remarks>
+    /// Une demande vide de quelques octets coûte une compression et un envoi de
+    /// plusieurs dizaines de kilo-octets : sans plafond, un pair qui la répète
+    /// sature notre liaison montante. Un pair honnête ne redemande le même
+    /// manifeste que pour réappliquer ou après un déblocage, un geste de
+    /// joueur : deux secondes ne le gênent pas, et sa demande attend au lieu
+    /// de se perdre. Un manifeste qui a changé part sans attendre.
+    /// </remarks>
+    public static readonly TimeSpan ManifestAnswerInterval = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Tient ensemble la décision de répondre et l'envoi de la réponse.
+    /// </summary>
+    /// <remarks>
+    /// La pompe répond aux demandes, le tic aux demandes différées : sans ce
+    /// verrou, deux réponses pouvaient partir dans l'ordre inverse de leurs
+    /// décisions, et le pair garder la plus ancienne.
+    /// </remarks>
+    private readonly SemaphoreSlim _answering = new(1, 1);
+
+    /// <summary>Le dernier manifeste envoyé à ce pair, et quand.</summary>
+    /// <remarks>Comparé par référence : la source ne le reconstruit qu'après un changement.</remarks>
+    private CharacterManifest? _lastAnswer;
+
+    private DateTimeOffset _lastAnswerAt;
+
+    /// <summary>Une demande reçue et pas encore servie, que le tic sert à son heure.</summary>
+    private bool _answerOwed;
 
     /// <summary>
     /// Demandes de blobs en attente de service, déjà triées.
@@ -88,9 +121,10 @@ public sealed class PeerExchange : IAsyncDisposable
     /// <remarks>
     /// Servir tout ce que le cache contient ferait de nous un oracle (« as-tu
     /// croisé le joueur qui porte ce mod ? ») et une source des mods des autres
-    /// pairs. Écrit et lu par la seule pompe de la session.
+    /// pairs. Remplacé d'un bloc et jamais modifié : la pompe le lit pendant
+    /// que le tic peut servir une demande différée.
     /// </remarks>
-    private HashSet<BlobHash> _shared = [];
+    private volatile HashSet<BlobHash> _shared = [];
 
     /// <summary>Combien de fois chaque blob a été mis en service dans cette session.</summary>
     private readonly Dictionary<BlobHash, int> _serves = [];
@@ -126,7 +160,7 @@ public sealed class PeerExchange : IAsyncDisposable
 
     public PeerExchange(
         PeerSession session, IBlobStore store, ILocalAppearance local,
-        RateLimiter limiter, int dataChannels, int blockSize, Quotas quotas, ILogSink log,
+        RateLimiter limiter, int dataChannels, int blockSize, Quotas quotas, ILogSink log, IClock clock,
         Func<TransientCategories>? receive = null, Func<bool>? mayShare = null)
     {
         _session = session;
@@ -139,6 +173,7 @@ public sealed class PeerExchange : IAsyncDisposable
         _log = log;
         _receive = receive ?? (() => TransientCategories.All);
         _mayShare = mayShare ?? (() => true);
+        _clock = clock;
     }
 
     public PeerView View { get; private set; } = new(null, null, null, 0, 0, false);
@@ -254,6 +289,17 @@ public sealed class PeerExchange : IAsyncDisposable
     /// </remarks>
     public ValueTask RefreshAsync(CancellationToken ct) => RequestManifestAsync(ct);
 
+    /// <summary>Sert une demande de manifeste différée, si son heure est venue.</summary>
+    /// <remarks>
+    /// Appelé à chaque tic : la pompe ne se réveille qu'à l'arrivée d'une trame,
+    /// et le pair honnête qui attend sa réponse n'en envoie plus.
+    /// </remarks>
+    public async Task AnswerOwedAsync(CancellationToken ct)
+    {
+        if (Volatile.Read(ref _answerOwed))
+            await AnswerAsync(ct).ConfigureAwait(false);
+    }
+
     private async Task OnManifestRequestAsync(CancellationToken ct)
     {
         // Pas avant sa présence : c'est elle qui dit quel personnage il est,
@@ -269,28 +315,64 @@ public sealed class PeerExchange : IAsyncDisposable
             return;
         }
 
-        // Pas de permission d'envoi, ou un personnage listé par un service :
-        // rien ne part, et le pair ne peut pas distinguer ce silence de celui
-        // d'un client qui n'a encore rien construit.
-        if (_mayShare() is false)
+        await AnswerAsync(ct).ConfigureAwait(false);
+    }
+
+    private async Task AnswerAsync(CancellationToken ct)
+    {
+        await _answering.WaitAsync(ct).ConfigureAwait(false);
+
+        try
         {
-            _shared = [];
-            _log.Debug("Demande de manifeste ignorée : envoi non autorisé vers ce pair.");
-            return;
+            // Pas de permission d'envoi, ou un personnage listé par un service :
+            // rien ne part, et le pair ne peut pas distinguer ce silence de celui
+            // d'un client qui n'a encore rien construit.
+            if (_mayShare() is false)
+            {
+                _shared = [];
+                _lastAnswer = null;
+                Volatile.Write(ref _answerOwed, false);
+                _log.Debug("Demande de manifeste ignorée : envoi non autorisé vers ce pair.");
+                return;
+            }
+
+            var manifest = await _local.CurrentAsync(ct).ConfigureAwait(false);
+
+            if (manifest is null)
+            {
+                Volatile.Write(ref _answerOwed, false);
+                return;
+            }
+
+            // Le même manifeste déjà envoyé il y a moins de l'intervalle, ou une
+            // file de contrôle déjà pleine : la demande attend le tic au lieu
+            // de partir. Attendre ici bloquerait la pompe derrière un pair qui
+            // n'accuse pas réception, et ses trames s'entasseraient.
+            var now = _clock.UtcNow;
+
+            if ((ReferenceEquals(manifest, _lastAnswer) && now - _lastAnswerAt < ManifestAnswerInterval)
+                || _session.Link.PendingOn(ChannelPlan.ControlChannel) > QueuedPacketsPerChannel)
+            {
+                Volatile.Write(ref _answerOwed, true);
+                return;
+            }
+
+            Volatile.Write(ref _answerOwed, false);
+            _lastAnswer = manifest;
+            _lastAnswerAt = now;
+
+            // Retenu avant l'envoi : les demandes de blobs qui suivent la réponse
+            // se trient contre ce manifeste-ci, pas contre le précédent.
+            _shared = manifest.Replacements.Select(r => r.Hash).ToHashSet();
+
+            await _session.SendAsync(
+                ChannelPlan.ControlChannel, MessageKind.ManifestData, ManifestCodec.Compress(manifest), ct)
+                .ConfigureAwait(false);
         }
-
-        var manifest = await _local.CurrentAsync(ct).ConfigureAwait(false);
-
-        if (manifest is null)
-            return;
-
-        // Retenu avant l'envoi : les demandes de blobs qui suivent la réponse
-        // se trient contre ce manifeste-ci, pas contre le précédent.
-        _shared = manifest.Replacements.Select(r => r.Hash).ToHashSet();
-
-        await _session.SendAsync(
-            ChannelPlan.ControlChannel, MessageKind.ManifestData, ManifestCodec.Compress(manifest), ct)
-            .ConfigureAwait(false);
+        finally
+        {
+            _answering.Release();
+        }
     }
 
     private async Task OnManifestDataAsync(byte[] payload, CancellationToken ct)
@@ -429,7 +511,8 @@ public sealed class PeerExchange : IAsyncDisposable
             return;
         }
 
-        var wanted = new List<BlobHash>(Math.Min((int)count, _shared.Count));
+        var shared = _shared;
+        var wanted = new List<BlobHash>(Math.Min((int)count, shared.Count));
         var refused = 0;
 
         for (var i = 0; i < count; i++)
@@ -437,7 +520,7 @@ public sealed class PeerExchange : IAsyncDisposable
             var hash = BlobHash.FromBytes(payload.AsSpan(2 + (i * BlobHash.SizeInBytes), BlobHash.SizeInBytes));
             var served = _serves.GetValueOrDefault(hash);
 
-            if (_shared.Contains(hash) is false || served >= MaxServesPerBlob)
+            if (shared.Contains(hash) is false || served >= MaxServesPerBlob)
             {
                 refused++;
                 continue;

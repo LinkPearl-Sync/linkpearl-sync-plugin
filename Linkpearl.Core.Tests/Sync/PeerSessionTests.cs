@@ -56,7 +56,10 @@ internal sealed class HeldLink : IPeerLink
 
     public float PacketLossPercent => 0;
 
-    public int PendingOn(byte channel) => 0;
+    /// <summary>Ce que la file d'envoi de chaque canal dit contenir, pour simuler un pair qui n'accuse pas.</summary>
+    public int Pending { get; set; }
+
+    public int PendingOn(byte channel) => Pending;
 
     public EndPoint? Remote => new IPEndPoint(IPAddress.Loopback, 7777);
 
